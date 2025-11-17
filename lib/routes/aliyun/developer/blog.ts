@@ -22,12 +22,6 @@ export const route: Route = {
         supportPodcast: false,
         supportScihub: false,
     },
-    radar: [
-        {
-            source: ['developer.aliyun.com/blog'],
-            target: '/developer/blog',
-        },
-    ],
     name: '开发者社区 - 技术博客',
     maintainers: ['Aloklok'],
     handler,
@@ -60,28 +54,30 @@ async function handler() {
         list.map((item) =>
             cache.tryGet(item.link, async () => {
                 try {
-                    await sleep(Math.random() * 1500 + 500); // 随机等待 0.5-2 秒
+                    await sleep(Math.random() * 1500 + 500);
 
                     const detailResponse = await ofetch(item.link);
-                    const scriptMatch = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '(.*?)';/s); // 使用 s 标志以匹配换行符
+                    const scriptMatch = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '(.*?)';/s);
 
                     if (scriptMatch && scriptMatch[1]) {
-                        let content = scriptMatch[1];
+                        const rawContent = scriptMatch[1]; // 获取最原始的字符串
 
-                        // 【最终修复】三步净化法，保证解码正确
-                        // 1. 修复不合法的 JSON 转义：将 \' 替换为 '
-                        content = content.replace(/\\'/g, "'");
-
-                        // 2. 使用 JSON.parse 来处理所有合法的 JS/JSON 转义 (如 \uXXXX, \n, \\, \")
-                        content = JSON.parse(`"${content}"`);
-
-                        // 3. 解码 HTML 实体 (如 &lt;, &gt;)
-                        content = decode(content);
-                        
-                        item.description = content;
+                        try {
+                            // 我们依然尝试之前的净化流程
+                            let content = rawContent.replace(/\\'/g, "'");
+                            content = JSON.parse(`"${content}"`);
+                            content = decode(content);
+                            item.description = content;
+                        } catch (e) {
+                            // 【法医取证】如果净化失败，打印出最原始的、导致失败的字符串！
+                            logger.error(`[Aliyun Blog - FORENSIC] JSON parsing failed for: ${item.link}`);
+                            logger.error(`[Aliyun Blog - FORENSIC] Error message: ${e.message}`);
+                            logger.error(`[Aliyun Blog - FORENSIC] RAW STRING THAT FAILED:`);
+                            logger.error(rawContent); // 打印完整的原始物证
+                        }
                     }
                 } catch (error) {
-                    logger.error(`[Aliyun Blog] Failed to parse content for ${item.link}: ${error.message}. Falling back to summary.`);
+                    logger.error(`[Aliyun Blog] Top-level error for ${item.link}: ${error.message}. Falling back to summary.`);
                 }
                 return item;
             })
