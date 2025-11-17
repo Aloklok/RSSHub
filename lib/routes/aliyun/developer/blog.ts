@@ -6,7 +6,7 @@ import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
 import { art } from '@/utils/render';
-import * as path from 'node:path';
+import path from 'node:path'; // [修复] 修正 import 规范
 import config from '@/config'; // [修复] 导入全局 config
 
 // 随机延迟函数
@@ -19,7 +19,7 @@ export const route: Route = {
     parameters: {},
     features: {
         requireConfig: false,
-        requirePuppeteer: false, // 明确不需要 Puppeteer
+        requirePuppeteer: false,
         antiCrawler: true,
         supportBT: false,
         supportPodcast: false,
@@ -43,7 +43,7 @@ async function handler() {
     // 抓取列表页
     const response = await ofetch(currentUrl, {
         headers: {
-            'User-Agent': config.ua, // [修复] 使用 config.ua
+            'User-Agent': config.ua, // [修复] 使用全局 config.ua
         },
     });
     const $ = load(response);
@@ -75,7 +75,7 @@ async function handler() {
 
                     const detailResponse = await ofetch(item.link, {
                         headers: {
-                            'User-Agent': config.ua, // [修复] 使用 config.ua
+                            'User-Agent': config.ua, // [修复] 使用全局 config.ua
                         },
                     });
 
