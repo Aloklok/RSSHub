@@ -1,7 +1,8 @@
+// lib/routes/infoq/topic.ts
 import { Route } from '@/types';
 import cache from '@/utils/cache';
 import ofetch from '@/utils/ofetch';
-import utils from './utils';
+import { ProcessFeed } from './utils';
 
 export const route: Route = {
     path: '/topic/:id',
@@ -16,13 +17,9 @@ export const route: Route = {
         supportPodcast: false,
         supportScihub: false,
     },
-    radar: [
-        {
-            source: ['infoq.cn/topic/:id'],
-        },
-    ],
+    radar: [{ source: ['infoq.cn/topic/:id'] }],
     name: '话题',
-    maintainers: ['brilon'],
+    maintainers: ['brilon', 'Aloklok'],
     handler,
 };
 
@@ -34,36 +31,32 @@ async function handler(ctx) {
 
     const infoBody = Number.isNaN(Number(paramId)) ? { alias: paramId } : { id: Number.parseInt(paramId) };
 
+    // 获取话题信息
     const info = await ofetch(infoUrl, {
         method: 'POST',
-        headers: {
-            Referer: pageUrl,
-        },
+        headers: { Referer: pageUrl },
         body: infoBody,
     });
-    const infoData = info.data;
-    const topicName = infoData.name;
+    const topicName = info.data.name;
 
+    // 获取文章列表（默认15篇）
     const resp = await ofetch(apiUrl, {
         method: 'POST',
-        headers: {
-            Referer: pageUrl,
-        },
+        headers: { Referer: pageUrl },
         body: {
-            id: infoData.id,
+            id: info.data.id,
             ptype: 0,
-            size: ctx.req.query('limit') ? Number(ctx.req.query('limit')) : 30,
+            size: ctx.req.query('limit') ? Number(ctx.req.query('limit')) : 15,
             type: 0,
         },
     });
 
-    const data = resp.data;
-    const items = await utils.ProcessFeed(data, cache);
+    const items = await ProcessFeed(resp.data, cache);
 
     return {
         title: `InfoQ 话题 - ${topicName}`,
-        description: infoData.desc,
-        image: infoData.cover,
+        description: info.data.desc,
+        image: info.data.cover,
         link: pageUrl,
         item: items,
     };
