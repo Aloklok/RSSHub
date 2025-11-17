@@ -1,4 +1,4 @@
-// 文件路径: lib/routes/aliyun/blog.ts
+// 文件路径: lib/routes/aliyun/developer/blog.ts
 import { Route } from '@/types';
 import ofetch from '@/utils/ofetch';
 import { load } from 'cheerio';
@@ -6,8 +6,7 @@ import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
 import { art } from '@/utils/render';
-import path from 'node:path'; // [修复] 修正 import 规范
-import config from '@/config'; // [修复] 导入全局 config
+import path from 'node:path'; // [规范] 确认使用正确的默认导入
 
 // 随机延迟函数
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,12 +39,8 @@ async function handler() {
     const rootUrl = 'https://developer.aliyun.com';
     const currentUrl = `${rootUrl}/blog`;
 
-    // 抓取列表页
-    const response = await ofetch(currentUrl, {
-        headers: {
-            'User-Agent': config.ua, // [修复] 使用全局 config.ua
-        },
-    });
+    // [修复] 移除 headers。RSSHub 的 ofetch 包装器会自动处理 User-Agent。
+    const response = await ofetch(currentUrl);
     const $ = load(response);
 
     const list = $('li.blog-home-main-box-card')
@@ -73,11 +68,8 @@ async function handler() {
                     // [优化] 使用 1 到 4 秒的随机延迟，有效防止反爬虫
                     await sleep(Math.random() * 3000 + 1000);
 
-                    const detailResponse = await ofetch(item.link, {
-                        headers: {
-                            'User-Agent': config.ua, // [修复] 使用全局 config.ua
-                        },
-                    });
+                    // [修复] 移除 headers。RSSHub 的 ofetch 包装器会自动处理 User-Agent。
+                    const detailResponse = await ofetch(item.link);
 
                     // [核心] 使用正则表达式从 JS 变量中提取 HTML 内容
                     const scriptText = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '(.*?)';/);
@@ -85,6 +77,7 @@ async function handler() {
                     if (scriptText && scriptText[1]) {
                         
                         // [规范] 使用 art-template 渲染内容
+                        // [路径] __dirname 会指向 .../aliyun/developer/
                         item.description = art(path.join(__dirname, 'templates/article-inner.art'), {
                             larkContent: scriptText[1],
                         });
