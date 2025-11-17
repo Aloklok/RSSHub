@@ -6,6 +6,9 @@ import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
 
+// 【最终优化】定义一个延时函数，模拟人类的阅读间隔
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export const route: Route = {
     path: '/developer/blog',
     categories: ['programming', 'cloud-computing'],
@@ -53,18 +56,18 @@ async function handler() {
                 link: link.startsWith('http') ? link : `${rootUrl}${link}`,
                 author: item.find('a.blog-card-author-item').first().text().trim(),
                 pubDate: parseDate(item.find('div.blog-card-time').text().trim()),
-                // 先用列表页的摘要作为临时 description
                 description: item.find('p.blog-card-desc').text().trim(),
             };
         });
 
-    // 【重要优化】使用 for...of 循环代替 Promise.all，将并行请求改为串行请求
-    // 这样可以避免因瞬间请求过多而被目标网站屏蔽
     const items = [];
     for (const item of list) {
         const cachedItem = await cache.tryGet(item.link, async () => {
             logger.debug(`Fetching full content for: ${item.link}`);
             try {
+                // 【最终优化】在每次请求前，强制等待 1 秒
+                await sleep(1000);
+
                 const detailResponse = await ofetch(item.link, {
                     headers: {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
@@ -74,11 +77,10 @@ async function handler() {
                 const fullText = content('div.article-inner').html();
                 
                 if (fullText) {
-                    item.description = fullText; // 如果获取到全文，就替换掉临时摘要
+                    item.description = fullText;
                 }
             } catch (error) {
                 logger.error(`Failed to fetch article detail for ${item.link}: ${error.message}`);
-                // 如果获取失败，item.description 依然是列表页的摘要，不会为空
             }
             return item;
         });
