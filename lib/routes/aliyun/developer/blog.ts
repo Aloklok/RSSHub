@@ -1,12 +1,13 @@
 // 文件路径: lib/routes/aliyun/developer/blog.ts
 import { Route } from '@/types';
 import ofetch from '@/utils/ofetch';
-import { load, decode } from 'cheerio'; // [修复] 导入 decode 函数
+import { load } from 'cheerio';
+import { decode } from 'he'; // [修复] 从 'he' 库导入 decode
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
 import { art } from '@/utils/render';
-import path from 'node:path'; 
+import path from 'node:path';
 
 // 随机延迟函数
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -69,11 +70,11 @@ async function handler() {
 
                     if (scriptText && scriptText[1]) {
                         
-                        // [修复] 核心两步清理
+                        // [核心清理]
                         // 1. 用 JSON.parse "反转义" JavaScript 字符串 (处理 \uXXXX, \", \/ 等)
                         const unescapedJsString = JSON.parse(`"${scriptText[1]}"`);
                         
-                        // 2. 用 decode "反转义" HTML 实体 (处理 &lt;, &gt; 等)
+                        // 2. 用 he.decode "反转义" HTML 实体 (处理 &lt;, &gt;, &quot; 等)
                         const cleanedHtml = decode(unescapedJsString);
 
                         item.description = art(path.join(__dirname, 'templates/article-inner.art'), {
