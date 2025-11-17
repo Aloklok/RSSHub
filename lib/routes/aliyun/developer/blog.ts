@@ -4,7 +4,7 @@ import ofetch from '@/utils/ofetch';
 import { load } from 'cheerio';
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
-import logger from '@/utils/logger'; // 引入日志模块
+import logger from '@/utils/logger';
 
 export const route: Route = {
     path: '/developer/blog',
@@ -14,7 +14,7 @@ export const route: Route = {
     features: {
         requireConfig: false,
         requirePuppeteer: false,
-        antiCrawler: true, // 我们怀疑它有反爬，标记一下
+        antiCrawler: true,
         supportBT: false,
         supportPodcast: false,
         supportScihub: false,
@@ -34,22 +34,11 @@ async function handler() {
     const rootUrl = 'https://developer.aliyun.com';
     const currentUrl = `${rootUrl}/blog`;
 
-    let response;
-    try {
-        // 【重要改动】我们在这里增加了 try...catch
-        response = await ofetch(currentUrl, {
-            // 模拟浏览器 User-Agent，这是反反爬虫的第一步
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-            },
-        });
-    } catch (error) {
-        // 如果 ofetch 请求失败，打印详细的错误日志
-        logger.error(`Aliyun Developer Blog request failed: ${error.message}`);
-        // 抛出一个更明确的错误，这样 RSSHub 会显示更友好的信息
-        throw new Error(`Failed to fetch Aliyun Developer Blog page. Error: ${error.message}`);
-    }
-
+    const response = await ofetch(currentUrl, {
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        },
+    });
     const $ = load(response);
 
     const list = $('li.blog-home-main-box-card')
@@ -62,38 +51,39 @@ async function handler() {
             return {
                 title: titleElement.find('h2').text().trim(),
                 link: link.startsWith('http') ? link : `${rootUrl}${link}`,
-                author: item.find('a.blog-card-author-item').text().trim(),
+                author: item.find('a.blog-card-author-item').first().text().trim(),
                 pubDate: parseDate(item.find('div.blog-card-time').text().trim()),
+                // 先用列表页的摘要作为临时 description
+                description: item.find('p.blog-card-desc').text().trim(),
             };
         });
-    
-    // 【重要改动】如果列表为空，说明页面结构可能变了或者被反爬了
-    if (list.length === 0) {
-        // 打印一些HTML内容帮助我们调试
-        logger.debug(`Aliyun Developer Blog page HTML: ${$('body').html().slice(0, 500)}`);
-        throw new Error('Could not find any articles on the page. The page structure may have changed or an anti-crawler mechanism is in place.');
-    }
 
-    const items = await Promise.all(
-        list.map((item) =>
-            cache.tryGet(item.link, async () => {
-                try {
-                    const detailResponse = await ofetch(item.link, {
-                        headers: {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-                        },
-                    });
-                    const content = load(detailResponse);
-                    item.description = content('div.article-inner').html();
-                } catch (error) {
-                    // 如果获取详情页失败，只记录错误，并返回不含正文的内容，避免整个路由失败
-                    logger.error(`Failed to fetch article detail for ${item.link}: ${error.message}`);
-                    item.description = 'Failed to fetch full content.';
+    // 【重要优化】使用 for...of 循环代替 Promise.all，将并行请求改为串行请求
+    // 这样可以避免因瞬间请求过多而被目标网站屏蔽
+    const items = [];
+    for (const item of list) {
+        const cachedItem = await cache.tryGet(item.link, async () => {
+            logger.debug(`Fetching full content for: ${item.link}`);
+            try {
+                const detailResponse = await ofetch(item.link, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+                    },
+                });
+                const content = load(detailResponse);
+                const fullText = content('div.article-inner').html();
+                
+                if (fullText) {
+                    item.description = fullText; // 如果获取到全文，就替换掉临时摘要
                 }
-                return item;
-            })
-        )
-    );
+            } catch (error) {
+                logger.error(`Failed to fetch article detail for ${item.link}: ${error.message}`);
+                // 如果获取失败，item.description 依然是列表页的摘要，不会为空
+            }
+            return item;
+        });
+        items.push(cachedItem);
+    }
 
     return {
         title: '阿里云开发者社区 - 技术博客',
