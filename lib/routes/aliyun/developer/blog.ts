@@ -1,13 +1,12 @@
 // 文件路径: lib/routes/aliyun/developer/blog.ts
 import { Route } from '@/types';
 import ofetch from '@/utils/ofetch';
-import { load } from 'cheerio';
-import { decode } from 'entities'; // [正确] 导入 'entities' 用于 HTML 解码
+import { load, decode } in 'cheerio'; // [修复] 导入 decode 函数
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
 import { art } from '@/utils/render';
-import path from 'node:path';
+import path from 'node:path'; 
 
 // 随机延迟函数
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,7 +39,6 @@ async function handler() {
     const rootUrl = 'https://developer.aliyun.com';
     const currentUrl = `${rootUrl}/blog`;
 
-    // RSSHub 的 ofetch 包装器会自动处理 User-Agent
     const response = await ofetch(currentUrl);
     const $ = load(response);
 
@@ -72,24 +70,19 @@ async function handler() {
 
                     if (scriptText && scriptText[1]) {
                         
-                        // [修复] 开始：三步清理法
-                        // 1. 将 JS 字符串字面量转换为 "JSON 安全" 的字符串
-                        //    必须先转义 \，再转义 "
-                        const safeJsonString = '"' + scriptText[1].replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
-
-                        // 2. 用 JSON.parse "反转义" JavaScript 字符串 (处理 \uXXXX, \', \n 等)
-                        const unescapedJsString = JSON.parse(safeJsonString);
+                        // [修复] 核心两步清理
+                        // 1. 用 JSON.parse "反转义" JavaScript 字符串 (处理 \uXXXX, \", \/ 等)
+                        const unescapedJsString = JSON.parse(`"${scriptText[1]}"`);
                         
-                        // 3. 用 entities.decode "反转义" HTML 实体 (处理 &lt;, &gt;, &quot; 等)
+                        // 2. 用 decode "反转义" HTML 实体 (处理 &lt;, &gt; 等)
                         const cleanedHtml = decode(unescapedJsString);
 
                         item.description = art(path.join(__dirname, 'templates/article-inner.art'), {
-                            larkContent: cleanedHtml, // 传入最终清理后的 HTML
+                            larkContent: cleanedHtml, // 传入清理后的 HTML
                         });
                     }
                     
                 } catch (error) {
-                    // 现在的 error 会是 "Bad escaped character in JSON..."
                     logger.error(`[Aliyun Blog] ofetch failed for ${item.link}: ${error.message}. Falling back to summary.`);
                 }
                 return item;
