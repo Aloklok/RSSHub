@@ -5,10 +5,11 @@ import { load } from 'cheerio';
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
-import { art } from '@/utils/render'; // [新增] 导入 art 模板引擎
-import * as path from 'node:path'; // [新增] 导入 path 模块
+import { art } from '@/utils/render';
+import * as path from 'node:path';
+import config from '@/config'; // [修复] 导入全局 config
 
-// [新增] 随机延迟函数
+// 随机延迟函数
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const route: Route = {
@@ -18,7 +19,7 @@ export const route: Route = {
     parameters: {},
     features: {
         requireConfig: false,
-        requirePuppeteer: false, // [修改] 明确不需要 Puppeteer
+        requirePuppeteer: false, // 明确不需要 Puppeteer
         antiCrawler: true,
         supportBT: false,
         supportPodcast: false,
@@ -39,10 +40,10 @@ async function handler() {
     const rootUrl = 'https://developer.aliyun.com';
     const currentUrl = `${rootUrl}/blog`;
 
-    // [优化] 抓取列表页时也带上 User-Agent
+    // 抓取列表页
     const response = await ofetch(currentUrl, {
         headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+            'User-Agent': config.ua, // [修复] 使用 config.ua
         },
     });
     const $ = load(response);
@@ -63,7 +64,7 @@ async function handler() {
             };
         });
 
-    // [优化] 使用 Promise.all 并行处理所有文章，性能远高于 for 循环
+    // 使用 Promise.all 并行处理所有文章
     const items = await Promise.all(
         list.map((item) =>
             cache.tryGet(item.link, async () => {
@@ -74,36 +75,31 @@ async function handler() {
 
                     const detailResponse = await ofetch(item.link, {
                         headers: {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+                            'User-Agent': config.ua, // [修复] 使用 config.ua
                         },
                     });
 
-                    // [核心修复] 在 script 标签中寻找 GLOBAL_CONFIG.larkContent
-                    // 我们不再关心 'div.article-inner'，因为我们知道它是空的
+                    // [核心] 使用正则表达式从 JS 变量中提取 HTML 内容
                     const scriptText = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '(.*?)';/);
 
                     if (scriptText && scriptText[1]) {
-                        // 找到了！scriptText[1] 就是那段完整的、被转义的 HTML 字符串
                         
-                        // [注意] 从 JS 变量中提取的字符串是转义过的，但 art 模板的 '{{{' 会自动反转义
-                        // 我们用模板把它包回 div.article-inner，使其与原网页结构一致
+                        // [规范] 使用 art-template 渲染内容
                         item.description = art(path.join(__dirname, 'templates/article-inner.art'), {
                             larkContent: scriptText[1],
                         });
                     }
-                    // 如果没找到，item.description 会保持为短描述
                     
                 } catch (error) {
                     logger.error(`[Aliyun Blog] ofetch failed for ${item.link}: ${error.message}. Falling back to summary.`);
-                    // 失败时，item.description 保持为短描述
                 }
-                return item; // 无论成功失败，都返回 item
+                return item;
             })
         )
     );
 
     return {
-        title: '阿里云开发者社区 - 技术博客 (nopuppteer)', // 你可以改成你想要的版本号
+        title: '阿里云开发者社区 - 技术博客 (nopuppteer)', // 你的版本号
         link: currentUrl,
         description: '阿里云开发者社区的技术博客，分享云计算、大数据、人工智能等前沿技术。',
         item: items,
