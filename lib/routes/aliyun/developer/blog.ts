@@ -67,49 +67,55 @@ async function handler() {
 
                         const $content = load(content, { xmlMode: false });
                         
-                        // 【修复】转换<card>为<img>
+                        // 【图片转换】
                         $content('card[type="inline"][name="image"]').each((_, el) => {
                             const $el = $content(el);
                             const value = $el.attr('value');
                             if (value) {
                                 try {
-                                    // 1. 解码URL编码
                                     const decodedValue = decodeURIComponent(value);
-                                    
-                                    // 2. 移除 data: 前缀
                                     const jsonString = decodedValue.replace(/^data:/, '');
-                                    
-                                    // 3. 解析JSON
                                     const imageData = JSON.parse(jsonString);
-                                    
-                                    // 4. 创建标准img
                                     const $img = $content(`
                                         <img src="${imageData.src}" 
                                              alt="${imageData.name || ''}"
                                              ${imageData.width ? `width="${imageData.width}"` : ''}
                                              ${imageData.height ? `height="${imageData.height}"` : ''}>
                                     `);
-                                    
                                     $el.replaceWith($img);
-                                } catch (e) {
-                                    logger.warn(`[Aliyun Blog] 图片解析失败: ${e.message}`);
+                                } catch {
                                     $el.remove();
                                 }
                             } else {
                                 $el.remove();
                             }
                         });
+
+                        // 【终极净化】
+                        // 1. 移除所有无用属性
+                        $content('[data-lake-id], [class], [id]').removeAttr('data-lake-id class id');
                         
-                        // 净化
-                        $content('[data-lake-id]').removeAttr('data-lake-id');
-                        $content('[class]').removeAttr('class');
+                        // 2. 解包所有span（无论有无属性）
                         $content('span').each((_, el) => {
                             const $el = $content(el);
-                            if (Object.keys($el.attr()).length === 0) {
-                                $el.replaceWith($el.contents());
+                            // 如果span有子元素，解包；如果是纯文本，也解包
+                            $el.replaceWith($el.contents());
+                        });
+                        
+                        // 3. 清理空段落：只包含br或空白的p
+                        $content('p').each((_, el) => {
+                            const $el = $content(el);
+                            const text = $el.text().trim();
+                            const hasImg = $el.find('img').length > 0;
+                            const hasBrOnly = $el.children().length === 1 && $el.children('br').length === 1;
+                            if (!text && !hasImg && hasBrOnly) {
+                                $el.replaceWith('<br>'); // 空p转为单个br
+                            } else if (!text && !hasImg) {
+                                $el.remove(); // 完全空的p直接删除
                             }
                         });
-                        $content('p:empty').remove();
+                        
+                        // 4. 压缩连续br
                         $content('br + br').remove();
                         
                         content = $content('body').html() || content;
