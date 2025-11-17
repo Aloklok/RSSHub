@@ -2,7 +2,6 @@
 import { Route } from '@/types';
 import ofetch from '@/utils/ofetch';
 import { load } from 'cheerio';
-import { decode } from 'entities';
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
@@ -60,24 +59,16 @@ async function handler() {
                     const scriptMatch = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '(.*?)';/s);
 
                     if (scriptMatch && scriptMatch[1]) {
-                        const rawContent = scriptMatch[1]; // 获取最原始的字符串
+                        let content = scriptMatch[1];
 
-                        try {
-                            // 我们依然尝试之前的净化流程
-                            let content = rawContent.replace(/\\'/g, "'");
-                            content = JSON.parse(`"${content}"`);
-                            content = decode(content);
-                            item.description = content;
-                        } catch (e) {
-                            // 【法医取证】如果净化失败，打印出最原始的、导致失败的字符串！
-                            logger.error(`[Aliyun Blog - FORENSIC] JSON parsing failed for: ${item.link}`);
-                            logger.error(`[Aliyun Blog - FORENSIC] Error message: ${e.message}`);
-                            logger.error(`[Aliyun Blog - FORENSIC] RAW STRING THAT FAILED:`);
-                            logger.error(rawContent); // 打印完整的原始物证
-                        }
+                        // 【最终修复】返璞归真，直接还原 JavaScript 字符串
+                        // 这个方法可以正确处理 \' 和 \\ 等转义
+                        content = content.replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+                        
+                        item.description = content;
                     }
                 } catch (error) {
-                    logger.error(`[Aliyun Blog] Top-level error for ${item.link}: ${error.message}. Falling back to summary.`);
+                    logger.error(`[Aliyun Blog] Failed to process content for ${item.link}: ${error.message}. Falling back to summary.`);
                 }
                 return item;
             })
