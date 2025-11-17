@@ -1,4 +1,4 @@
-// 文件路径: lib/routes/aliyun/blog.ts
+// 文件路径: lib/routes/aliyun/developer/blog.ts
 import { Route } from '@/types';
 import ofetch from '@/utils/ofetch';
 import { load } from 'cheerio';
@@ -59,7 +59,7 @@ async function handler() {
                     const detailResponse = await ofetch(item.link);
                     const scriptMatch = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '([\s\S]*?)';/s);
 
-                    if (scriptMatch && scriptMatch[0]) {
+                    if (scriptMatch && scriptMatch[1]) {
                         const sandbox = { GLOBAL_CONFIG: {} };
                         vm.createContext(sandbox);
                         vm.runInContext(scriptMatch[0], sandbox);
@@ -67,7 +67,7 @@ async function handler() {
 
                         const $content = load(content, { xmlMode: false });
                         
-                        // 1. 转换图片
+                        // 1. 转换图片 - 修复URL空格和添加referrerpolicy
                         $content('card[type="inline"][name="image"]').each((_, el) => {
                             const $el = $content(el);
                             const value = $el.attr('value');
@@ -76,14 +76,20 @@ async function handler() {
                                     const decodedValue = decodeURIComponent(value);
                                     const jsonString = decodedValue.replace(/^data:/, '');
                                     const imageData = JSON.parse(jsonString);
+                                    
+                                    // 关键修复：去除URL末尾空格并添加referrerpolicy
+                                    const imageSrc = imageData.src ? imageData.src.trim() : '';
+                                    
                                     const $img = $content(`
-                                        <img src="${imageData.src}" 
+                                        <img src="${imageSrc}" 
                                              alt="${imageData.name || ''}"
                                              ${imageData.width ? `width="${imageData.width}"` : ''}
-                                             ${imageData.height ? `height="${imageData.height}"` : ''}>
+                                             ${imageData.height ? `height="${imageData.height}"` : ''}
+                                             referrerpolicy="no-referrer">
                                     `);
                                     $el.replaceWith($img);
-                                } catch {
+                                } catch (e) {
+                                    logger.warn(`[Aliyun Blog] 图片解析失败: ${e.message}`);
                                     $el.remove();
                                 }
                             } else {
@@ -91,10 +97,9 @@ async function handler() {
                             }
                         });
 
-                        // 2. 【关键】移除所有残留的<card>标签（特别是表格）
+                        // 2. 移除所有残留的<card>标签（特别是表格）
                         $content('card').each((_, el) => {
                             const $el = $content(el);
-                            // 尝试提取文本内容，否则直接移除
                             const text = $el.text().trim();
                             if (text) {
                                 $el.replaceWith(`<p>[卡片内容: ${text.substring(0, 50)}...]</p>`);
@@ -126,7 +131,7 @@ async function handler() {
                         item.description = content;
                     }
 
-                    // 【关键】修复作者邮箱格式（添加虚拟邮箱）
+                    // 修复作者邮箱格式
                     if (item.author) {
                         item.author = `${item.author} (none@aliyun.com)`;
                     }
