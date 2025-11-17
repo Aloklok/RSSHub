@@ -262,18 +262,20 @@ RUN \
     export PROJECT_ROOT=/app && \
     node /minifier/minify-docker.js && \
     \
-    # [修复] 开始：手动将 'he' 包复制到最小化的 node_modules 中
-    # 因为 minify-docker.js (nft) 没能自动追踪到它
-    echo "Manually copying 'he' package to minimal dependencies..." && \
-    mkdir -p /app/app-minimal/node_modules/he && \
-    cp -r /app/node_modules/he/* /app/app-minimal/node_modules/he/ && \
-    # [修复] 结束
-\
+    # [修复] 开始：手动将 'he' 包复制到最小化的 node_modules 中
+    # 因为 minify-docker.js (nft) 没能自动追踪到它
+    echo "Manually copying 'he' package to minimal dependencies..." && \
+    mkdir -p /app/app-minimal/node_modules/he && \
+    cp -r /app/node_modules/he/* /app/app-minimal/node_modules/he/ && \
+    # [修复] 结束
+    \
     rm -rf /app/node_modules /app/scripts && \
     mv /app/app-minimal/node_modules /app/ && \
     rm -rf /app/app-minimal && \
     ls -la /app && \
     du -hd1 /app
+
+# ---------------------------------------------------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------------------------------------------------
 
