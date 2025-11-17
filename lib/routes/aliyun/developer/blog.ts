@@ -2,11 +2,12 @@
 import { Route } from '@/types';
 import ofetch from '@/utils/ofetch';
 import { load } from 'cheerio';
+import { decode } from 'entities';
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
-// 【终极武器】直接从 puppeteer-extra 导入，它会自动加载隐身插件
-import puppeteer from 'puppeteer-extra';
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const route: Route = {
     path: '/developer/blog',
@@ -15,7 +16,7 @@ export const route: Route = {
     parameters: {},
     features: {
         requireConfig: false,
-        requirePuppeteer: true,
+        requirePuppeteer: false,
         antiCrawler: true,
         supportBT: false,
         supportPodcast: false,
@@ -52,41 +53,70 @@ async function handler() {
     const items = await Promise.all(
         list.map((item) =>
             cache.tryGet(item.link, async () => {
-                let browser;
                 try {
-                    // 【关键改动】使用 puppeteer.launch() 启动一个带隐身插件的浏览器
-                    browser = await puppeteer.launch({
-                        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH, // RSSHub Docker 镜像会设置好这个环境变量
-                        headless: true,
-                        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-infobars', '--window-size=1280,720'],
-                    });
-                    const page = await browser.newPage();
+                    await sleep(Math.random() * 1500 + 500);
 
-                    await page.setRequestInterception(true);
-                    page.on('request', (request) => {
-                        if (['image', 'stylesheet', 'font', 'media'].includes(request.resourceType())) {
-                            request.abort();
-                        } else {
-                            request.continue();
-                        }
-                    });
+                    const detailResponse = await ofetch(item.link);
+                    const scriptMatch = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '(.*?)';/s);
 
-                    await page.goto(item.link, { waitUntil: 'networkidle0', timeout: 60000 });
-                    await page.waitForSelector('div.article-inner div.lake-engine-view p', { timeout: 30000 });
+                    if (scriptMatch && scriptMatch[1]) {
+                        let content = scriptMatch[1];
 
-                    const html = await page.content();
-                    const content = load(html);
-                    const fullText = content('div.article-inner').html();
-
-                    if (fullText && fullText.trim().length > 0) {
-                        item.description = fullText;
+                        // 步骤1：解码JS字符串转义
+                        content = JSON.parse(content);
+                        
+                        // 步骤2：HTML净化与图片转换
+                        const $content = load(content, { xmlMode: false });
+                        
+                        // 2.1 转换<card>为<img>（核心修复）
+                        $content('card[type="inline"][name="image"]').each((_, el) => {
+                            const $el = $content(el);
+                            const value = $el.attr('value');
+                            if (value) {
+                                try {
+                                    // 解码URL编码的JSON
+                                    const decodedValue = decodeURIComponent(value);
+                                    const imageData = JSON.parse(decodedValue);
+                                    
+                                    // 创建标准img标签
+                                    const $img = $content(`
+                                        <img src="${imageData.src}" 
+                                             alt="${imageData.name || ''}"
+                                             ${imageData.width ? `width="${imageData.width}"` : ''}
+                                             ${imageData.height ? `height="${imageData.height}"` : ''}>
+                                    `);
+                                    
+                                    $el.replaceWith($img);
+                                } catch (e) {
+                                    logger.warn(`[Aliyun Blog] 图片解析失败: ${e.message}`);
+                                    $el.remove();
+                                }
+                            } else {
+                                $el.remove();
+                            }
+                        });
+                        
+                        // 2.2 移除冗余属性
+                        $content('[data-lake-id]').removeAttr('data-lake-id');
+                        $content('[class]').removeAttr('class');
+                        
+                        // 2.3 解包无属性span
+                        $content('span').each((_, el) => {
+                            const $el = $content(el);
+                            if (Object.keys($el.attr()).length === 0) {
+                                $el.replaceWith($el.contents());
+                            }
+                        });
+                        
+                        // 2.4 清理空元素
+                        $content('p:empty').remove();
+                        $content('br + br').remove();
+                        
+                        content = $content('body').html() || content;
+                        item.description = content;
                     }
                 } catch (error) {
-                    logger.error(`[Aliyun Blog] Puppeteer (stealth) failed for ${item.link}: ${error.message}`);
-                } finally {
-                    if (browser) {
-                        await browser.close();
-                    }
+                    logger.error(`[Aliyun Blog] 抓取失败 ${item.link}: ${error.message}`);
                 }
                 return item;
             })
