@@ -2,13 +2,10 @@
 import { Route } from '@/types';
 import ofetch from '@/utils/ofetch';
 import { load } from 'cheerio';
-import { decode } from 'entities';
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
-import vm from 'node:vm'; // 【终极武器】引入 Node.js 虚拟机模块
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+import puppeteer from '@/utils/puppeteer'; // 引入 Puppeteer
 
 export const route: Route = {
     path: '/developer/blog',
@@ -17,7 +14,7 @@ export const route: Route = {
     parameters: {},
     features: {
         requireConfig: false,
-        requirePuppeteer: false,
+        requirePuppeteer: true, // 明确需要 Puppeteer
         antiCrawler: true,
         supportBT: false,
         supportPodcast: false,
@@ -29,11 +26,15 @@ export const route: Route = {
 };
 
 async function handler() {
+    logger.info('[Aliyun Blog DEBUG] Route handler started.');
+
     const rootUrl = 'https://developer.aliyun.com';
     const currentUrl = `${rootUrl}/blog`;
 
+    // 1. 获取列表页
     const response = await ofetch(currentUrl);
     const $ = load(response);
+    logger.info('[Aliyun Blog DEBUG] List page fetched successfully.');
 
     const list = $('li.blog-home-main-box-card')
         .toArray()
@@ -51,45 +52,75 @@ async function handler() {
             };
         });
 
-    const items = await Promise.all(
-        list.map((item) =>
-            cache.tryGet(item.link, async () => {
-                try {
-                    await sleep(Math.random() * 1500 + 500);
+    logger.info(`[Aliyun Blog DEBUG] Found ${list.length} items. Preparing Puppeteer.`);
 
-                    const detailResponse = await ofetch(item.link);
-                    const scriptMatch = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '(.*?)';/s);
+    // 2. 【性能优化】只启动一次浏览器实例
+    let browser;
+    try {
+        logger.info('[Aliyun Blog DEBUG] ---> Step 1: About to call puppeteer()');
+        browser = await puppeteer();
+        logger.info('[Aliyun Blog DEBUG] ---> Step 2: puppeteer() successful. Browser instance created.');
 
-                    if (scriptMatch && scriptMatch[0]) { // 注意：这里用 scriptMatch[0] 获取完整语句
-                        
-                        // 【最终修复方案】使用 VM 模块安全执行 JS 代码
-                        // 1. 创建一个安全的沙盒环境
-                        const sandbox = { GLOBAL_CONFIG: {} };
-                        vm.createContext(sandbox);
+        // 3. 并发处理所有文章
+        const items = await Promise.all(
+            list.map((item) =>
+                cache.tryGet(item.link, async () => {
+                    let page;
+                    try {
+                        logger.info(`[Aliyun Blog DEBUG] ------> Step 3: Creating new page for "${item.title}"`);
+                        page = await browser.newPage();
 
-                        // 2. 在沙盒中运行我们从网页上抓取的那行 JS 代码
-                        vm.runInContext(scriptMatch[0], sandbox);
+                        logger.info(`[Aliyun Blog DEBUG] ------> Step 4: Setting up request interception for "${item.title}"`);
+                        await page.setRequestInterception(true);
+                        page.on('request', (request) => {
+                            if (['image', 'stylesheet', 'font', 'media'].includes(request.resourceType())) {
+                                request.abort();
+                            } else {
+                                request.continue();
+                            }
+                        });
 
-                        // 3. 从沙盒中取出已经由 JS 引擎完美解码的字符串
-                        let content = sandbox.GLOBAL_CONFIG.larkContent;
+                        logger.info(`[Aliyun Blog DEBUG] ------> Step 5: Navigating to ${item.link}`);
+                        await page.goto(item.link, { waitUntil: 'networkidle0', timeout: 60000 }); // 等待网络空闲，超时延长到60秒
 
-                        // 4. 最后，对这个干净的 HTML 字符串解码 HTML 实体
-                        content = decode(content);
-                        
-                        item.description = content;
+                        logger.info(`[Aliyun Blog DEBUG] ------> Step 6: Waiting for selector on ${item.link}`);
+                        await page.waitForSelector('div.article-inner div.lake-engine-view p', { timeout: 30000 });
+
+                        logger.info(`[Aliyun Blog DEBUG] ------> Step 7: Extracting content from ${item.link}`);
+                        const html = await page.content();
+                        const content = load(html);
+                        const fullText = content('div.article-inner').html();
+
+                        if (fullText) {
+                            item.description = fullText;
+                        }
+                    } catch (error) {
+                        logger.error(`[Aliyun Blog DEBUG] !!! CRITICAL ERROR for "${item.title}": ${error.message}`);
+                    } finally {
+                        if (page) {
+                            await page.close();
+                            logger.info(`[Aliyun Blog DEBUG] ------> Step 8: Page closed for "${item.title}"`);
+                        }
                     }
-                } catch (error) {
-                    logger.error(`[Aliyun Blog] Failed to process content for ${item.link}: ${error.message}. Falling back to summary.`);
-                }
-                return item;
-            })
-        )
-    );
+                    return item;
+                })
+            )
+        );
 
-    return {
-        title: '阿里云开发者社区 - 技术博客',
-        link: currentUrl,
-        description: '阿里云开发者社区的技术博客，分享云计算、大数据、人工智能等前沿技术。',
-        item: items,
-    };
+        return {
+            title: '阿里云开发者社区 - 技术博客 (Puppeteer Debug)',
+            link: currentUrl,
+            description: '阿里云开发者社区的技术博客，分享云计算、大数据、人工智能等前沿技术。',
+            item: items,
+        };
+    } catch (error) {
+        logger.error(`[Aliyun Blog DEBUG] !!! CATASTROPHIC FAILURE: Could not even start the browser or process items: ${error.message}`);
+        // 如果连浏览器都启动失败，抛出一个错误让 RSSHub 显示
+        throw new Error(`Catastrophic failure in Puppeteer process: ${error.message}`);
+    } finally {
+        if (browser) {
+            await browser.close();
+            logger.info('[Aliyun Blog DEBUG] ---> Step 9: Final browser instance closed.');
+        }
+    }
 }
