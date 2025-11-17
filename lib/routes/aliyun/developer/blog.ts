@@ -7,7 +7,7 @@ import cache from '@/utils/cache';
 import logger from '@/utils/logger';
 import vm from 'node:vm';
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export const route: Route = {
     path: '/developer/blog',
@@ -39,11 +39,11 @@ async function handler() {
         .map((item) => {
             item = $(item);
             const titleElement = item.find('a.blog-card-title');
-            const link = titleElement.attr('href');
+            const link = titleElement.attr('href')?.trim();
 
             return {
                 title: titleElement.find('h2').text().trim(),
-                link: link.startsWith('http') ? link : `${rootUrl}${link}`,
+                link: link?.startsWith('http') ? link : `${rootUrl}${link}`,
                 author: item.find('a.blog-card-author-item').first().text().trim(),
                 pubDate: parseDate(item.find('div.blog-card-time').text().trim()),
                 description: item.find('p.blog-card-desc').text().trim(),
@@ -67,7 +67,7 @@ async function handler() {
 
                         const $content = load(content, { xmlMode: false });
                         
-                        // 【图片转换】
+                        // 1. 转换图片
                         $content('card[type="inline"][name="image"]').each((_, el) => {
                             const $el = $content(el);
                             const value = $el.attr('value');
@@ -91,35 +91,44 @@ async function handler() {
                             }
                         });
 
-                        // 【终极净化】
-                        // 1. 移除所有无用属性
+                        // 2. 【关键】移除所有残留的<card>标签（特别是表格）
+                        $content('card').each((_, el) => {
+                            const $el = $content(el);
+                            // 尝试提取文本内容，否则直接移除
+                            const text = $el.text().trim();
+                            if (text) {
+                                $el.replaceWith(`<p>[卡片内容: ${text.substring(0, 50)}...]</p>`);
+                            } else {
+                                $el.remove();
+                            }
+                        });
+
+                        // 3. 净化HTML
                         $content('[data-lake-id], [class], [id]').removeAttr('data-lake-id class id');
-                        
-                        // 2. 解包所有span（无论有无属性）
                         $content('span').each((_, el) => {
                             const $el = $content(el);
-                            // 如果span有子元素，解包；如果是纯文本，也解包
                             $el.replaceWith($el.contents());
                         });
-                        
-                        // 3. 清理空段落：只包含br或空白的p
                         $content('p').each((_, el) => {
                             const $el = $content(el);
                             const text = $el.text().trim();
                             const hasImg = $el.find('img').length > 0;
                             const hasBrOnly = $el.children().length === 1 && $el.children('br').length === 1;
                             if (!text && !hasImg && hasBrOnly) {
-                                $el.replaceWith('<br>'); // 空p转为单个br
+                                $el.replaceWith('<br>');
                             } else if (!text && !hasImg) {
-                                $el.remove(); // 完全空的p直接删除
+                                $el.remove();
                             }
                         });
-                        
-                        // 4. 压缩连续br
                         $content('br + br').remove();
                         
                         content = $content('body').html() || content;
                         item.description = content;
+                    }
+
+                    // 【关键】修复作者邮箱格式（添加虚拟邮箱）
+                    if (item.author) {
+                        item.author = `${item.author} (none@aliyun.com)`;
                     }
                 } catch (error) {
                     logger.error(`[Aliyun Blog] 抓取失败 ${item.link}: ${error.message}`);
