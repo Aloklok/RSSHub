@@ -1,12 +1,12 @@
 // 文件路径: lib/routes/aliyun/developer/blog.ts
 import { Route } from '@/types';
 import ofetch from '@/utils/ofetch';
-import { load } from 'cheerio';
+import { load, decode } from 'cheerio'; // [修复] 导入 decode 函数
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
 import { art } from '@/utils/render';
-import path from 'node:path'; // [规范] 确认使用正确的默认导入
+import path from 'node:path'; 
 
 // 随机延迟函数
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -39,7 +39,6 @@ async function handler() {
     const rootUrl = 'https://developer.aliyun.com';
     const currentUrl = `${rootUrl}/blog`;
 
-    // [修复] 移除 headers。RSSHub 的 ofetch 包装器会自动处理 User-Agent。
     const response = await ofetch(currentUrl);
     const $ = load(response);
 
@@ -55,31 +54,30 @@ async function handler() {
                 link: link.startsWith('http') ? link : `${rootUrl}${link}`,
                 author: item.find('a.blog-card-author-item').first().text().trim(),
                 pubDate: parseDate(item.find('div.blog-card-time').text().trim()),
-                description: item.find('p.blog-card-desc').text().trim(), // 先保留短描述作为后备
+                description: item.find('p.blog-card-desc').text().trim(), 
             };
         });
 
-    // 使用 Promise.all 并行处理所有文章
     const items = await Promise.all(
         list.map((item) =>
             cache.tryGet(item.link, async () => {
                 logger.debug(`Fetching full content for: ${item.link}`);
                 try {
-                    // [优化] 使用 1 到 4 秒的随机延迟，有效防止反爬虫
                     await sleep(Math.random() * 3000 + 1000);
-
-                    // [修复] 移除 headers。RSSHub 的 ofetch 包装器会自动处理 User-Agent。
                     const detailResponse = await ofetch(item.link);
-
-                    // [核心] 使用正则表达式从 JS 变量中提取 HTML 内容
                     const scriptText = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '(.*?)';/);
 
                     if (scriptText && scriptText[1]) {
                         
-                        // [规范] 使用 art-template 渲染内容
-                        // [路径] __dirname 会指向 .../aliyun/developer/
+                        // [修复] 核心两步清理
+                        // 1. 用 JSON.parse "反转义" JavaScript 字符串 (处理 \uXXXX, \", \/ 等)
+                        const unescapedJsString = JSON.parse(`"${scriptText[1]}"`);
+                        
+                        // 2. 用 decode "反转义" HTML 实体 (处理 &lt;, &gt; 等)
+                        const cleanedHtml = decode(unescapedJsString);
+
                         item.description = art(path.join(__dirname, 'templates/article-inner.art'), {
-                            larkContent: scriptText[1],
+                            larkContent: cleanedHtml, // 传入清理后的 HTML
                         });
                     }
                     
@@ -92,7 +90,7 @@ async function handler() {
     );
 
     return {
-        title: '阿里云开发者社区 - 技术博客 (nopuppteer)', // 你的版本号
+        title: '阿里云开发者社区 - 技术博客 (nopuppteer)', 
         link: currentUrl,
         description: '阿里云开发者社区的技术博客，分享云计算、大数据、人工智能等前沿技术。',
         item: items,
