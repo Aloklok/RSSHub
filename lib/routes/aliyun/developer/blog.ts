@@ -2,7 +2,7 @@
 import { Route } from '@/types';
 import ofetch from '@/utils/ofetch';
 import { load } from 'cheerio';
-import { decode } from 'he'; // [修复] 从 'he' 库导入 decode
+import { decode } from 'entities'; // [最终修复] 导入 'entities'，而不是 'he'
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
@@ -40,6 +40,7 @@ async function handler() {
     const rootUrl = 'https://developer.aliyun.com';
     const currentUrl = `${rootUrl}/blog`;
 
+    // RSSHub 的 ofetch 包装器会自动处理 User-Agent
     const response = await ofetch(currentUrl);
     const $ = load(response);
 
@@ -65,16 +66,17 @@ async function handler() {
                 logger.debug(`Fetching full content for: ${item.link}`);
                 try {
                     await sleep(Math.random() * 3000 + 1000);
+                    
+                    // RSSHub 的 ofetch 包装器会自动处理 User-Agent
                     const detailResponse = await ofetch(item.link);
                     const scriptText = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '(.*?)';/);
 
                     if (scriptText && scriptText[1]) {
                         
-                        // [核心清理]
                         // 1. 用 JSON.parse "反转义" JavaScript 字符串 (处理 \uXXXX, \", \/ 等)
                         const unescapedJsString = JSON.parse(`"${scriptText[1]}"`);
                         
-                        // 2. 用 he.decode "反转义" HTML 实体 (处理 &lt;, &gt;, &quot; 等)
+                        // 2. 用 entities.decode "反转义" HTML 实体 (处理 &lt;, &gt;, &quot; 等)
                         const cleanedHtml = decode(unescapedJsString);
 
                         item.description = art(path.join(__dirname, 'templates/article-inner.art'), {
