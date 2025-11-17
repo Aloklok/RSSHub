@@ -2,10 +2,13 @@
 import { Route } from '@/types';
 import ofetch from '@/utils/ofetch';
 import { load } from 'cheerio';
+import { decode } from 'entities';
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
-import puppeteer from '@/utils/puppeteer'; // 我们需要它！
+import vm from 'node:vm'; // 【终极武器】引入 Node.js 虚拟机模块
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const route: Route = {
     path: '/developer/blog',
@@ -14,7 +17,7 @@ export const route: Route = {
     parameters: {},
     features: {
         requireConfig: false,
-        requirePuppeteer: true, // 必须为 true
+        requirePuppeteer: false,
         antiCrawler: true,
         supportBT: false,
         supportPodcast: false,
@@ -51,42 +54,33 @@ async function handler() {
     const items = await Promise.all(
         list.map((item) =>
             cache.tryGet(item.link, async () => {
-                const browser = await puppeteer();
-                const page = await browser.newPage();
-                
-                // 【关键优化】拦截不必要的请求，大幅降低内存消耗
-                await page.setRequestInterception(true);
-                page.on('request', (request) => {
-                    if (['image', 'stylesheet', 'font', 'media'].includes(request.resourceType())) {
-                        request.abort();
-                    } else {
-                        request.continue();
-                    }
-                });
-
                 try {
-                    await page.goto(item.link, {
-                        waitUntil: 'networkidle0', // 等待网络空闲，确保JS执行完毕
-                        timeout: 45000, // 延长超时时间到45秒
-                    });
+                    await sleep(Math.random() * 1500 + 500);
 
-                    // 等待最终渲染出的正文内容
-                    await page.waitForSelector('div.article-inner div.lake-engine-view p', { timeout: 30000 });
+                    const detailResponse = await ofetch(item.link);
+                    const scriptMatch = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '(.*?)';/s);
 
-                    const html = await page.content();
-                    const content = load(html);
+                    if (scriptMatch && scriptMatch[0]) { // 注意：这里用 scriptMatch[0] 获取完整语句
+                        
+                        // 【最终修复方案】使用 VM 模块安全执行 JS 代码
+                        // 1. 创建一个安全的沙盒环境
+                        const sandbox = { GLOBAL_CONFIG: {} };
+                        vm.createContext(sandbox);
 
-                    const fullText = content('div.article-inner').html();
-                    if (fullText) {
-                        item.description = fullText;
+                        // 2. 在沙盒中运行我们从网页上抓取的那行 JS 代码
+                        vm.runInContext(scriptMatch[0], sandbox);
+
+                        // 3. 从沙盒中取出已经由 JS 引擎完美解码的字符串
+                        let content = sandbox.GLOBAL_CONFIG.larkContent;
+
+                        // 4. 最后，对这个干净的 HTML 字符串解码 HTML 实体
+                        content = decode(content);
+                        
+                        item.description = content;
                     }
                 } catch (error) {
-                    logger.error(`[Aliyun Blog] Puppeteer failed for ${item.link}: ${error.message}. Falling back to summary.`);
-                } finally {
-                    await page.close();
-                    await browser.close();
+                    logger.error(`[Aliyun Blog] Failed to process content for ${item.link}: ${error.message}. Falling back to summary.`);
                 }
-                
                 return item;
             })
         )
