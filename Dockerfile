@@ -1,116 +1,200 @@
-// 文件路径: lib/routes/aliyun/blog.ts
-import { Route } from '@/types';
-import ofetch from '@/utils/ofetch';
-import { load } from 'cheerio';
-import { parseDate } from '@/utils/parse-date';
-import cache from '@/utils/cache';
-import logger from '@/utils/logger';
-import puppeteer from '@/utils/puppeteer';
+FROM node:24-bookworm AS dep-builder
+# Here we use the non-slim image to provide build-time deps (compilers and python), thus no need to install later.
+# This effectively speeds up qemu-based cross-build.
 
-export const route: Route = {
-    path: '/developer/blog',
-    categories: ['programming', 'cloud-computing'],
-    example: '/aliyun/developer/blog',
-    parameters: {},
-    features: {
-        requireConfig: false,
-        requirePuppeteer: true,
-        antiCrawler: true,
-        supportBT: false,
-        supportPodcast: false,
-        supportScihub: false,
-    },
-    radar: [
-        {
-            source: ['developer.aliyun.com/blog'],
-            target: '/developer/blog',
-        },
-    ],
-    name: '开发者社区 - 技术博客',
-    maintainers: ['Aloklok'],
-    handler,
-};
+WORKDIR /app
 
-// 【重要调试】定义一个函数来获取单个文章的全文
-async function getFullContent(item) {
-    return await cache.tryGet(item.link, async () => {
-        const browser = await puppeteer();
-        const page = await browser.newPage();
-        
-        logger.info(`[Aliyun Blog] Puppeteer starting for: ${item.link}`);
-        try {
-            await page.goto(item.link, {
-                waitUntil: 'domcontentloaded',
-            });
-            logger.info(`[Aliyun Blog] Page loaded for: ${item.link}`);
+# place ARG statement before RUN statement which need it to avoid cache miss
+ARG USE_CHINA_NPM_REGISTRY=0
+RUN \
+    set -ex && \
+    corepack enable pnpm && \
+    if [ "$USE_CHINA_NPM_REGISTRY" = 1 ]; then \
+        echo 'use npm mirror' && \
+        npm config set registry https://registry.npmmirror.com && \
+        yarn config set registry https://registry.npmmirror.com && \
+        pnpm config set registry https://registry.npmmirror.com ; \
+    fi;
 
-            await page.waitForSelector('div.article-inner div.lake-engine-view', { timeout: 30000 });
-            logger.info(`[Aliyun Blog] Selector found for: ${item.link}`);
+COPY ./tsconfig.json /app/
+COPY ./pnpm-lock.yaml /app/
+COPY ./package.json /app/
 
-            const html = await page.content();
-            const content = load(html);
+# lazy install Chromium to avoid cache miss, only install production dependencies to minimize the image size
+RUN \
+    set -ex && \
+    export PUPPETEER_SKIP_DOWNLOAD=true && \
+    pnpm install --frozen-lockfile && \
+    pnpm rb
 
-            const fullText = content('div.article-inner').html();
-            if (fullText) {
-                item.description = fullText;
-                logger.info(`[Aliyun Blog] Full content fetched successfully for: ${item.link}`);
-            } else {
-                logger.warn(`[Aliyun Blog] Full content is empty for: ${item.link}`);
-            }
-        } catch (error) {
-            logger.error(`[Aliyun Blog] Puppeteer failed for ${item.link}: ${error.message}`);
-        } finally {
-            await page.close();
-            await browser.close();
-            logger.info(`[Aliyun Blog] Puppeteer closed for: ${item.link}`);
-        }
-        
-        return item;
-    });
-}
+# ---------------------------------------------------------------------------------------------------------------------
 
+FROM debian:bookworm-slim AS dep-version-parser
+# This stage is necessary to limit the cache miss scope.
+# With this stage, any modification to package.json won't break the build cache of the next two stages as long as the
+# version unchanged.
+# node:24-bookworm-slim is based on debian:bookworm-slim so this stage would not cause any additional download.
 
-async function handler() {
-    logger.info('[Aliyun Blog] Route started');
-    const rootUrl = 'https://developer.aliyun.com';
-    const currentUrl = `${rootUrl}/blog`;
+WORKDIR /ver
+COPY ./package.json /app/
+RUN \
+    set -ex && \
+    grep -Po '(?<="rebrowser-puppeteer": ")[^\s"]*(?=")' /app/package.json | tee /ver/.puppeteer_version && \
+    grep -Po '(?<="@vercel/nft": ")[^\s"]*(?=")' /app/package.json | tee /ver/.nft_version && \
+    grep -Po '(?<="fs-extra": ")[^\s"]*(?=")' /app/package.json | tee /ver/.fs_extra_version
 
-    const response = await ofetch(currentUrl);
-    const $ = load(response);
-    logger.info('[Aliyun Blog] List page fetched');
+# ---------------------------------------------------------------------------------------------------------------------
 
-    const list = $('li.blog-home-main-box-card')
-        .toArray()
-        .map((item) => {
-            item = $(item);
-            const titleElement = item.find('a.blog-card-title');
-            const link = titleElement.attr('href');
+FROM node:24-bookworm-slim AS docker-minifier
+# The stage is used to further reduce the image size by removing unused files.
 
-            return {
-                title: titleElement.find('h2').text().trim(),
-                link: link.startsWith('http') ? link : `${rootUrl}${link}`,
-                author: item.find('a.blog-card-author-item').first().text().trim(),
-                pubDate: parseDate(item.find('div.blog-card-time').text().trim()),
-                description: item.find('p.blog-card-desc').text().trim(),
-            };
-        });
-    
-    logger.info(`[Aliyun Blog] Found ${list.length} items in list page`);
+WORKDIR /minifier
+COPY --from=dep-version-parser /ver/* /minifier/
 
-    // 【重要调试】将 Promise.all 拆成串行循环，并增加大量日志
-    const items = [];
-    for (const item of list) {
-        logger.info(`[Aliyun Blog] Processing item: ${item.title}`);
-        const detailedItem = await getFullContent(item);
-        items.push(detailedItem);
-        logger.info(`[Aliyun Blog] Finished processing item: ${item.title}`);
-    }
+ARG USE_CHINA_NPM_REGISTRY=0
+RUN \
+    set -ex && \
+    npm install -g corepack@latest && \
+    corepack enable pnpm && \
+    if [ "$USE_CHINA_NPM_REGISTRY" = 1 ]; then \
+        npm config set registry https://registry.npmmirror.com && \
+        yarn config set registry https://registry.npmmirror.com && \
+        pnpm config set registry https://registry.npmmirror.com ; \
+    fi; \
+    pnpm add @vercel/nft@$(cat .nft_version) fs-extra@$(cat .fs_extra_version) --save-prod
 
-    logger.info('[Aliyun Blog] All items processed, returning result');
-    return {
-        title: '阿里云开发者社区 - 技术博客v6',
-        link: currentUrl,
-        description: '阿里云开发者社区的技术博客，分享云计算、大数据、人工智能等前沿技术。',
-        item: items,
-    };
-}
+COPY . /app
+COPY --from=dep-builder /app /app
+
+WORKDIR /app
+RUN \
+    set -ex && \
+    pnpm build && \
+    rm -rf /app/lib && \
+    cp /app/scripts/docker/minify-docker.js /minifier/ && \
+    export PROJECT_ROOT=/app && \
+    node /minifier/minify-docker.js && \
+    rm -rf /app/node_modules /app/scripts && \
+    mv /app/app-minimal/node_modules /app/ && \
+    rm -rf /app/app-minimal && \
+    ls -la /app && \
+    du -hd1 /app
+
+# ---------------------------------------------------------------------------------------------------------------------
+
+FROM node:24-bookworm-slim AS chromium-downloader
+# This stage is necessary to improve build concurrency and minimize the image size.
+# Yeah, downloading Chromium never needs those dependencies below.
+
+WORKDIR /app
+COPY ./.puppeteerrc.cjs /app/
+COPY --from=dep-version-parser /ver/.puppeteer_version /app/.puppeteer_version
+
+ARG TARGETPLATFORM
+ARG USE_CHINA_NPM_REGISTRY=0
+ARG PUPPETEER_SKIP_DOWNLOAD=1
+# The official recommended way to use Puppeteer on x86(_64) is to use the bundled Chromium from Puppeteer:
+# https://pptr.dev/faq#q-why-doesnt-puppeteer-vxxx-workwith-chromium-vyyy
+RUN \
+    set -ex ; \
+    if [ "$PUPPETEER_SKIP_DOWNLOAD" = 0 ] && [ "$TARGETPLATFORM" = 'linux/amd64' ]; then \
+        npm install -g corepack@latest && \
+        corepack enable pnpm && \
+        if [ "$USE_CHINA_NPM_REGISTRY" = 1 ]; then \
+            npm config set registry https://registry.npmmirror.com && \
+            yarn config set registry https://registry.npmmirror.com && \
+            pnpm config set registry https://registry.npmmirror.com ; \
+        fi; \
+        echo 'Downloading Chromium...' && \
+        unset PUPPETEER_SKIP_DOWNLOAD && \
+        pnpm --allow-build=rebrowser-puppeteer add rebrowser-puppeteer@$(cat /app/.puppeteer_version) --save-prod && \
+        pnpm rb && \
+        pnpx rebrowser-puppeteer browsers install chrome ; \
+    else \
+        mkdir -p /app/node_modules/.cache/puppeteer ; \
+    fi;
+
+# ---------------------------------------------------------------------------------------------------------------------
+
+FROM node:24-bookworm-slim AS app
+
+LABEL org.opencontainers.image.authors="https://github.com/DIYgod/RSSHub"
+
+ENV NODE_ENV=production
+ENV TZ=Asia/Shanghai
+
+WORKDIR /app
+
+# install deps first to avoid cache miss or disturbing buildkit to build concurrently
+ARG TARGETPLATFORM
+ARG PUPPETEER_SKIP_DOWNLOAD=1
+# https://pptr.dev/troubleshooting#chrome-headless-doesnt-launch-on-unix
+# https://github.com/puppeteer/puppeteer/issues/7822
+# https://www.debian.org/releases/bookworm/amd64/release-notes/ch-information.en.html#noteworthy-obsolete-packages
+# The official recommended way to use Puppeteer on arm/arm64 is to install Chromium from the distribution repositories:
+# https://github.com/puppeteer/puppeteer/blob/07391bbf5feaf85c191e1aa8aa78138dce84008d/packages/puppeteer-core/src/node/BrowserFetcher.ts#L128-L131
+RUN \
+    set -ex && \
+    apt-get update && \
+    apt-get install -yq --no-install-recommends \
+        dumb-init git curl \
+    ; \
+    if [ "$PUPPETEER_SKIP_DOWNLOAD" = 0 ]; then \
+        if [ "$TARGETPLATFORM" = 'linux/amd64' ]; then \
+            apt-get install -yq --no-install-recommends \
+                ca-certificates fonts-liberation wget xdg-utils \
+                libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 libdrm2 \
+                libexpat1 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 \
+                libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 \
+            ; \
+        else \
+            apt-get install -yq --no-install-recommends \
+                chromium xvfb \
+            && \
+            echo "CHROMIUM_EXECUTABLE_PATH=$(which chromium)" | tee /app/.env ; \
+        fi; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=chromium-downloader /app/node_modules/.cache/puppeteer /app/node_modules/.cache/puppeteer
+
+RUN \
+    set -ex && \
+    if [ "$PUPPETEER_SKIP_DOWNLOAD" = 0 ] && [ "$TARGETPLATFORM" = 'linux/amd64' ]; then \
+        echo 'Verifying Chromium installation...' && \
+        if ldd $(find /app/node_modules/.cache/puppeteer/ -name chrome -type f) | grep "not found"; then \
+            echo "!!! Chromium has unmet shared libs !!!" && \
+            exit 1 ; \
+        else \
+            echo "Awesome! All shared libs are met!" ; \
+        fi; \
+    fi;
+
+COPY --from=docker-minifier /app /app
+
+EXPOSE 1200
+ENTRYPOINT ["dumb-init", "--"]
+
+CMD ["npm", "run", "start"]
+
+# ---------------------------------------------------------------------------------------------------------------------
+
+# In case Chromium has unmet shared libs, here is some magic to find and install the packages they belong to:
+# In most case you can just stop at `grep ^lib` and add those packages to the above stage.
+#
+# set -ex && \
+# apt-get update && \
+# apt install -yq --no-install-recommends \
+#     apt-file \
+# && \
+# apt-file update && \
+# ldd $(find /app/node_modules/.cache/puppeteer/ -name chrome -type f) | grep -Po "\S+(?= => not found)" | \
+# sed 's/\./\\./g' | awk '{print $1"$"}' | apt-file search -xlf - | grep ^lib | \
+# xargs -d '\n' -- \
+#     apt-get install -yq --no-install-recommends \
+# && \
+# apt purge -yq --auto-remove \
+#     apt-file \
+# rm -rf /tmp/.chromium_path /var/lib/apt/lists/*
+
+# !!! If you manually build Docker image but with buildx/BuildKit disabled, set TARGETPLATFORM yourself !!!
