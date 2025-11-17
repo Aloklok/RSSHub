@@ -2,6 +2,7 @@
 import { Route } from '@/types';
 import ofetch from '@/utils/ofetch';
 import { load } from 'cheerio';
+import { decode } from 'entities'; // 【您的伟大发现】直接使用内置的专业解码库
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
@@ -61,14 +62,18 @@ async function handler() {
                     if (scriptMatch && scriptMatch[1]) {
                         let content = scriptMatch[1];
 
-                        // 【最终修复】返璞归真，直接还原 JavaScript 字符串
-                        // 这个方法可以正确处理 \' 和 \\ 等转义
+                        // 【最终修复】两步净化法，使用官方内置工具
+                        // 1. 简单还原最常见的 JS 转义
                         content = content.replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+
+                        // 2. 使用专业的 `entities` 库解码所有 HTML 实体
+                        // 这会正确处理 `&lt;` `&gt;` `&quot;` 以及 `\uXXXX` 形式的 Unicode
+                        content = decode(content);
                         
                         item.description = content;
                     }
                 } catch (error) {
-                    logger.error(`[Aliyun Blog] Failed to process content for ${item.link}: ${error.message}. Falling back to summary.`);
+                    logger.error(`[Aliyun Blog] Failed to parse content for ${item.link}: ${error.message}. Falling back to summary.`);
                 }
                 return item;
             })
