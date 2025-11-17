@@ -2,12 +2,11 @@
 import { Route } from '@/types';
 import ofetch from '@/utils/ofetch';
 import { load } from 'cheerio';
-import { decode } from 'entities'; // 【重要】引入 HTML 实体解码库
+import { decode } from 'entities';
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
 
-// 随机延迟函数，模拟人类行为，避免被限流
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const route: Route = {
@@ -17,7 +16,7 @@ export const route: Route = {
     parameters: {},
     features: {
         requireConfig: false,
-        requirePuppeteer: false, // 我们不再需要 Puppeteer!
+        requirePuppeteer: false,
         antiCrawler: true,
         supportBT: false,
         supportPodcast: false,
@@ -61,32 +60,28 @@ async function handler() {
         list.map((item) =>
             cache.tryGet(item.link, async () => {
                 try {
-                    // 增加随机延迟，避免被限流
-                    await sleep(Math.random() * 2000 + 500); // 随机等待 0.5-2.5 秒
+                    await sleep(Math.random() * 1500 + 500); // 随机等待 0.5-2 秒
 
                     const detailResponse = await ofetch(item.link);
-                    
-                    // 1. 用正则表达式精确提取 larkContent 的内容
-                    const scriptMatch = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '(.*?)';/);
+                    const scriptMatch = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '(.*?)';/s); // 使用 s 标志以匹配换行符
 
                     if (scriptMatch && scriptMatch[1]) {
                         let content = scriptMatch[1];
 
-                        // 2. 【关键步骤】解码过程
-                        // 这是一个两层编码的字符串，需要“反向”解码
-                        
-                        // 第一层：解码 JavaScript 字符串转义 (比如 \\' -> ', \\" -> ")
-                        // JSON.parse 是一个绝佳的工具来做这件事
-                        // 我们需要先把它变成一个合法的 JSON 字符串
+                        // 【最终修复】三步净化法，保证解码正确
+                        // 1. 修复不合法的 JSON 转义：将 \' 替换为 '
+                        content = content.replace(/\\'/g, "'");
+
+                        // 2. 使用 JSON.parse 来处理所有合法的 JS/JSON 转义 (如 \uXXXX, \n, \\, \")
                         content = JSON.parse(`"${content}"`);
 
-                        // 第二层：解码 HTML 实体 (比如 &lt; -> <)
+                        // 3. 解码 HTML 实体 (如 &lt;, &gt;)
                         content = decode(content);
                         
                         item.description = content;
                     }
                 } catch (error) {
-                    logger.error(`[Aliyun Blog] Failed to fetch/parse content for ${item.link}: ${error.message}. Falling back to summary.`);
+                    logger.error(`[Aliyun Blog] Failed to parse content for ${item.link}: ${error.message}. Falling back to summary.`);
                 }
                 return item;
             })
@@ -94,7 +89,7 @@ async function handler() {
     );
 
     return {
-        title: '阿里云开发者社区 - 技术博客 (No-Puppeteer Final)',
+        title: '阿里云开发者社区 - 技术博客',
         link: currentUrl,
         description: '阿里云开发者社区的技术博客，分享云计算、大数据、人工智能等前沿技术。',
         item: items,
