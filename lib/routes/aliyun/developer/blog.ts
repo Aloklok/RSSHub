@@ -2,7 +2,7 @@
 import { Route } from '@/types';
 import ofetch from '@/utils/ofetch';
 import { load } from 'cheerio';
-import { decode } from 'entities'; // [最终修复] 导入 'entities'，而不是 'he'
+import { decode } from 'entities'; // [正确] 导入 'entities' 用于 HTML 解码
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
@@ -67,24 +67,29 @@ async function handler() {
                 try {
                     await sleep(Math.random() * 3000 + 1000);
                     
-                    // RSSHub 的 ofetch 包装器会自动处理 User-Agent
                     const detailResponse = await ofetch(item.link);
                     const scriptText = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '(.*?)';/);
 
                     if (scriptText && scriptText[1]) {
                         
-                        // 1. 用 JSON.parse "反转义" JavaScript 字符串 (处理 \uXXXX, \", \/ 等)
-                        const unescapedJsString = JSON.parse(`"${scriptText[1]}"`);
+                        // [修复] 开始：三步清理法
+                        // 1. 将 JS 字符串字面量转换为 "JSON 安全" 的字符串
+                        //    必须先转义 \，再转义 "
+                        const safeJsonString = '"' + scriptText[1].replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+
+                        // 2. 用 JSON.parse "反转义" JavaScript 字符串 (处理 \uXXXX, \', \n 等)
+                        const unescapedJsString = JSON.parse(safeJsonString);
                         
-                        // 2. 用 entities.decode "反转义" HTML 实体 (处理 &lt;, &gt;, &quot; 等)
+                        // 3. 用 entities.decode "反转义" HTML 实体 (处理 &lt;, &gt;, &quot; 等)
                         const cleanedHtml = decode(unescapedJsString);
 
                         item.description = art(path.join(__dirname, 'templates/article-inner.art'), {
-                            larkContent: cleanedHtml, // 传入清理后的 HTML
+                            larkContent: cleanedHtml, // 传入最终清理后的 HTML
                         });
                     }
                     
                 } catch (error) {
+                    // 现在的 error 会是 "Bad escaped character in JSON..."
                     logger.error(`[Aliyun Blog] ofetch failed for ${item.link}: ${error.message}. Falling back to summary.`);
                 }
                 return item;
