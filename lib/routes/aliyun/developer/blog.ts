@@ -64,7 +64,7 @@ async function handler() {
         const cachedItem = await cache.tryGet(item.link, async () => {
             logger.debug(`Fetching full content for: ${item.link}`);
             try {
-                await sleep(1000);
+                await sleep(2000);
 
                 const detailResponse = await ofetch(item.link, {
                     headers: {
@@ -87,7 +87,7 @@ async function handler() {
 
     return {
         // 【重要调试标记】我们在标题里加入一个版本号
-        title: '阿里云开发者社区 - 技术博客 (v3-final-test)',
+        title: '阿里云开发者社区 - 技术博客 (v4-final-test)',
         link: currentUrl,
         description: '阿里云开发者社区的技术博客，分享云计算、大数据、人工智能等前沿技术。',
         item: items,
