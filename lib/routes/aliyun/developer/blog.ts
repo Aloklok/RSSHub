@@ -6,7 +6,6 @@ import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
 
-// 【最终优化】定义一个延时函数，模拟人类的阅读间隔
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const route: Route = {
@@ -65,7 +64,6 @@ async function handler() {
         const cachedItem = await cache.tryGet(item.link, async () => {
             logger.debug(`Fetching full content for: ${item.link}`);
             try {
-                // 【最终优化】在每次请求前，强制等待 1 秒
                 await sleep(1000);
 
                 const detailResponse = await ofetch(item.link, {
@@ -88,7 +86,8 @@ async function handler() {
     }
 
     return {
-        title: '阿里云开发者社区 - 技术博客',
+        // 【重要调试标记】我们在标题里加入一个版本号
+        title: '阿里云开发者社区 - 技术博客 (v3-final-test)',
         link: currentUrl,
         description: '阿里云开发者社区的技术博客，分享云计算、大数据、人工智能等前沿技术。',
         item: items,
