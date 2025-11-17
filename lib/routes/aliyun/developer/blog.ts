@@ -5,7 +5,7 @@ import { load } from 'cheerio';
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
-import puppeteer from '@/utils/puppeteer'; // 【重要】引入 Puppeteer
+import puppeteer from '@/utils/puppeteer';
 
 export const route: Route = {
     path: '/developer/blog',
@@ -14,7 +14,7 @@ export const route: Route = {
     parameters: {},
     features: {
         requireConfig: false,
-        requirePuppeteer: true, // 【重要】告诉 RSSHub 这个路由需要浏览器环境
+        requirePuppeteer: true,
         antiCrawler: true,
         supportBT: false,
         supportPodcast: false,
@@ -31,13 +31,53 @@ export const route: Route = {
     handler,
 };
 
+// 【重要调试】定义一个函数来获取单个文章的全文
+async function getFullContent(item) {
+    return await cache.tryGet(item.link, async () => {
+        const browser = await puppeteer();
+        const page = await browser.newPage();
+        
+        logger.info(`[Aliyun Blog] Puppeteer starting for: ${item.link}`);
+        try {
+            await page.goto(item.link, {
+                waitUntil: 'domcontentloaded',
+            });
+            logger.info(`[Aliyun Blog] Page loaded for: ${item.link}`);
+
+            await page.waitForSelector('div.article-inner div.lake-engine-view', { timeout: 30000 });
+            logger.info(`[Aliyun Blog] Selector found for: ${item.link}`);
+
+            const html = await page.content();
+            const content = load(html);
+
+            const fullText = content('div.article-inner').html();
+            if (fullText) {
+                item.description = fullText;
+                logger.info(`[Aliyun Blog] Full content fetched successfully for: ${item.link}`);
+            } else {
+                logger.warn(`[Aliyun Blog] Full content is empty for: ${item.link}`);
+            }
+        } catch (error) {
+            logger.error(`[Aliyun Blog] Puppeteer failed for ${item.link}: ${error.message}`);
+        } finally {
+            await page.close();
+            await browser.close();
+            logger.info(`[Aliyun Blog] Puppeteer closed for: ${item.link}`);
+        }
+        
+        return item;
+    });
+}
+
+
 async function handler() {
+    logger.info('[Aliyun Blog] Route started');
     const rootUrl = 'https://developer.aliyun.com';
     const currentUrl = `${rootUrl}/blog`;
 
-    // 列表页内容是静态的，用 ofetch 速度更快
     const response = await ofetch(currentUrl);
     const $ = load(response);
+    logger.info('[Aliyun Blog] List page fetched');
 
     const list = $('li.blog-home-main-box-card')
         .toArray()
@@ -51,51 +91,24 @@ async function handler() {
                 link: link.startsWith('http') ? link : `${rootUrl}${link}`,
                 author: item.find('a.blog-card-author-item').first().text().trim(),
                 pubDate: parseDate(item.find('div.blog-card-time').text().trim()),
-                description: item.find('p.blog-card-desc').text().trim(), // 先用摘要填充
+                description: item.find('p.blog-card-desc').text().trim(),
             };
         });
+    
+    logger.info(`[Aliyun Blog] Found ${list.length} items in list page`);
 
-    // 【重要改动】使用 Puppeteer 获取全文
-    const items = await Promise.all(
-        list.map((item) =>
-            cache.tryGet(item.link, async () => {
-                // 启动一个浏览器页面
-                const browser = await puppeteer();
-                const page = await browser.newPage();
-                
-                logger.debug(`Puppeteer navigating to: ${item.link}`);
-                try {
-                    // 访问文章链接
-                    await page.goto(item.link, {
-                        waitUntil: 'domcontentloaded', // 等待基本DOM加载完成
-                    });
+    // 【重要调试】将 Promise.all 拆成串行循环，并增加大量日志
+    const items = [];
+    for (const item of list) {
+        logger.info(`[Aliyun Blog] Processing item: ${item.title}`);
+        const detailedItem = await getFullContent(item);
+        items.push(detailedItem);
+        logger.info(`[Aliyun Blog] Finished processing item: ${item.title}`);
+    }
 
-                    // 等待正文容器被JS填充好，设置30秒超时
-                    await page.waitForSelector('div.article-inner div.lake-engine-view', { timeout: 30000 });
-
-                    // 获取最终渲染好的页面HTML
-                    const html = await page.content();
-                    const content = load(html);
-
-                    const fullText = content('div.article-inner').html();
-                    if (fullText) {
-                        item.description = fullText;
-                    }
-                } catch (error) {
-                    logger.error(`Puppeteer failed for ${item.link}: ${error.message}`);
-                } finally {
-                    // 关闭页面和浏览器
-                    await page.close();
-                    await browser.close();
-                }
-                
-                return item;
-            })
-        )
-    );
-
+    logger.info('[Aliyun Blog] All items processed, returning result');
     return {
-        title: '阿里云开发者社区 - 技术博客5.0',
+        title: '阿里云开发者社区 - 技术博客6.0',
         link: currentUrl,
         description: '阿里云开发者社区的技术博客，分享云计算、大数据、人工智能等前沿技术。',
         item: items,
