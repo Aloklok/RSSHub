@@ -2,12 +2,12 @@
 import { Route } from '@/types';
 import ofetch from '@/utils/ofetch';
 import { load } from 'cheerio';
-import { decode } from 'entities'; // [修复] 从 'entities' 库导入 decode (你的 package.json 中有)
+import { decode } from 'entities'; // [正确] 导入 'entities'
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
 import { art } from '@/utils/render';
-import path from 'node:path'; // [修复] 确保 'import' 语法正确
+import path from 'node:path';
 
 // 随机延迟函数
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,7 +40,6 @@ async function handler() {
     const rootUrl = 'https://developer.aliyun.com';
     const currentUrl = `${rootUrl}/blog`;
 
-    // RSSHub 的 ofetch 包装器会自动处理 User-Agent
     const response = await ofetch(currentUrl);
     const $ = load(response);
 
@@ -72,18 +71,20 @@ async function handler() {
 
                     if (scriptText && scriptText[1]) {
                         
-                        // [修复] 三步清理法
-                        // 1. 将 JS 字符串字面量转换为 "JSON 安全" 的字符串
-                        const safeJsonString = '"' + scriptText[1].replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+                        // [最终修复] 调换解码顺序
 
-                        // 2. 用 JSON.parse "反转义" JavaScript 字符串 (处理 \uXXXX, \', \n 等)
-                        const unescapedJsString = JSON.parse(safeJsonString);
+                        // 1. [先] 解码 HTML 实体 (处理 &lt;, &gt;, &quot; 等)
+                        // 这会把 '... name=\"&quot;doc-version&quot;\" ...' 变成 '... name=\"\"doc-version\"\" ...'
+                        let content = decode(scriptText[1]);
+
+                        // 2. [后] 将 JS 字符串字面量转换为 "JSON 安全" 的字符串
+                        content = '"' + content.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+
+                        // 3. [最后] 用 JSON.parse "反转义" JS 转义 (处理 \uXXXX, \n, 和我们刚加的 \")
+                        content = JSON.parse(content);
                         
-                        // 3. 用 entities.decode "反转义" HTML 实体 (处理 &lt;, &gt;, &quot; 等)
-                        const cleanedHtml = decode(unescapedJsString);
-
                         item.description = art(path.join(__dirname, 'templates/article-inner.art'), {
-                            larkContent: cleanedHtml, // 传入最终清理后的 HTML
+                            larkContent: content, // 传入最终清理后的 HTML
                         });
                     }
                     
