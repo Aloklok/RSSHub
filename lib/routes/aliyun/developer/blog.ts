@@ -54,13 +54,14 @@ async function handler() {
             };
         });
 
+    // 【最终优化】只启动一次浏览器实例，大幅提升性能
+    const browser = await puppeteer();
+
     const items = await Promise.all(
         list.map((item) =>
             cache.tryGet(item.link, async () => {
-                const browser = await puppeteer();
-                const page = await browser.newPage();
+                const page = await browser.newPage(); // 每个任务只创建一个新页面
                 
-                // 【性能优化】拦截不必要的请求，大幅降低内存消耗
                 await page.setRequestInterception(true);
                 page.on('request', (request) => {
                     if (['image', 'stylesheet', 'font', 'media'].includes(request.resourceType())) {
@@ -70,7 +71,6 @@ async function handler() {
                     }
                 });
 
-                logger.debug(`[Aliyun Blog] Puppeteer navigating to: ${item.link}`);
                 try {
                     await page.goto(item.link, {
                         waitUntil: 'domcontentloaded',
@@ -83,23 +83,23 @@ async function handler() {
 
                     const fullText = content('div.article-inner').html();
                     if (fullText) {
-                        item.description = fullText;
+                        item.description = fullText; // 直接修改 item 的 description
                     }
                 } catch (error) {
-                    // 【健壮性优化】即使 Puppeteer 失败，也不让整个路由崩溃
                     logger.error(`[Aliyun Blog] Puppeteer failed for ${item.link}: ${error.message}. Falling back to summary.`);
                 } finally {
-                    await page.close();
-                    await browser.close();
+                    await page.close(); // 只关闭页面，不关闭浏览器
                 }
                 
-                return item;
+                return item; // 返回修改后的 item
             })
         )
     );
 
+    await browser.close(); // 所有任务完成后，关闭浏览器实例
+
     return {
-        title: '阿里云开发者社区 - 技术博客v7',
+        title: '阿里云开发者社区 - 技术博客v8',
         link: currentUrl,
         description: '阿里云开发者社区的技术博客，分享云计算、大数据、人工智能等前沿技术。',
         item: items,
