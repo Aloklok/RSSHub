@@ -6,6 +6,7 @@ import { decode } from 'entities';
 import { parseDate } from '@/utils/parse-date';
 import cache from '@/utils/cache';
 import logger from '@/utils/logger';
+import vm from 'node:vm'; // 【必须使用VM】处理不规则JS字符串
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -57,35 +58,33 @@ async function handler() {
                     await sleep(Math.random() * 1500 + 500);
 
                     const detailResponse = await ofetch(item.link);
-                    const scriptMatch = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '(.*?)';/s);
+                    const scriptMatch = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '([\s\S]*?)';/s);
 
-                    if (scriptMatch && scriptMatch[1]) {
-                        let content = scriptMatch[1];
-
-                        // 步骤1：解码JS字符串转义
-                        content = JSON.parse(content);
+                    if (scriptMatch && scriptMatch[0]) {
+                        // 【核心】使用VM执行代码，自动处理所有转义
+                        const sandbox = { GLOBAL_CONFIG: {} };
+                        vm.createContext(sandbox);
+                        vm.runInContext(scriptMatch[0], sandbox);
                         
-                        // 步骤2：HTML净化与图片转换
+                        let content = sandbox.GLOBAL_CONFIG.larkContent;
+
+                        // 净化HTML
                         const $content = load(content, { xmlMode: false });
                         
-                        // 2.1 转换<card>为<img>（核心修复）
+                        // 转换卡片图片
                         $content('card[type="inline"][name="image"]').each((_, el) => {
                             const $el = $content(el);
                             const value = $el.attr('value');
                             if (value) {
                                 try {
-                                    // 解码URL编码的JSON
                                     const decodedValue = decodeURIComponent(value);
                                     const imageData = JSON.parse(decodedValue);
-                                    
-                                    // 创建标准img标签
                                     const $img = $content(`
                                         <img src="${imageData.src}" 
                                              alt="${imageData.name || ''}"
                                              ${imageData.width ? `width="${imageData.width}"` : ''}
                                              ${imageData.height ? `height="${imageData.height}"` : ''}>
                                     `);
-                                    
                                     $el.replaceWith($img);
                                 } catch (e) {
                                     logger.warn(`[Aliyun Blog] 图片解析失败: ${e.message}`);
@@ -96,19 +95,18 @@ async function handler() {
                             }
                         });
                         
-                        // 2.2 移除冗余属性
+                        // 移除data-lake-id
                         $content('[data-lake-id]').removeAttr('data-lake-id');
+                        // 移除class
                         $content('[class]').removeAttr('class');
-                        
-                        // 2.3 解包无属性span
+                        // 解包无属性span
                         $content('span').each((_, el) => {
                             const $el = $content(el);
                             if (Object.keys($el.attr()).length === 0) {
                                 $el.replaceWith($el.contents());
                             }
                         });
-                        
-                        // 2.4 清理空元素
+                        // 清理空元素
                         $content('p:empty').remove();
                         $content('br + br').remove();
                         
