@@ -1,63 +1,95 @@
-// lib/routes/infoq/topic.ts
+// 文件路径: lib/routes/infoq/topic.ts
 import { Route } from '@/types';
-import cache from '@/utils/cache';
 import ofetch from '@/utils/ofetch';
-import { ProcessFeed } from './utils';
+import { load } from 'cheerio';
+import { parseDate } from '@/utils/parse-date';
+import cache from '@/utils/cache';
+import logger from '@/utils/logger';
 
 export const route: Route = {
     path: '/topic/:id',
-    categories: ['new-media'],
-    example: '/infoq/topic/1',
-    parameters: { id: '话题id，可在 [InfoQ全部话题](https://www.infoq.cn/topics) 页面找到URL里的话题id' },
+    categories: ['programming'],
+    example: '/infoq/topic/architecture',
+    parameters: { id: '话题ID，可在话题页URL中找到' },
     features: {
         requireConfig: false,
         requirePuppeteer: false,
-        antiCrawler: false,
+        antiCrawler: true,
         supportBT: false,
         supportPodcast: false,
         supportScihub: false,
     },
-    radar: [{ source: ['infoq.cn/topic/:id'] }],
     name: '话题',
-    maintainers: ['brilon', 'Aloklok'],
+    maintainers: ['your-name'],
     handler,
 };
 
 async function handler(ctx) {
-    const paramId = ctx.req.param('id');
-    const apiUrl = 'https://www.infoq.cn/public/v1/article/getList';
-    const infoUrl = 'https://www.infoq.cn/public/v1/topic/getInfo';
-    const pageUrl = `https://www.infoq.cn/topic/${paramId}`;
+    const topicId = ctx.req.param('id');
+    const baseUrl = 'https://www.infoq.com';
+    const topicUrl = `${baseUrl}/topic/${topicId}`;
 
-    const infoBody = Number.isNaN(Number(paramId)) ? { alias: paramId } : { id: Number.parseInt(paramId) };
+    const response = await ofetch(topicUrl);
+    const $ = load(response);
 
-    // 获取话题信息
-    const info = await ofetch(infoUrl, {
-        method: 'POST',
-        headers: { Referer: pageUrl },
-        body: infoBody,
-    });
-    const topicName = info.data.name;
+    const list = $('div.topic_div')
+        .toArray()
+        .map((item) => {
+            const $item = $(item);
+            const $link = $item.find('a[href]');
+            const href = $link.attr('href');
+            const title = $item.find('h2').text().trim();
+            
+            return {
+                title,
+                // 关键修复1：确保link始终为字符串，避免undefined
+                link: typeof href === 'string' ? href.trim() : '',
+                pubDate: parseDate($item.find('span.date').text().trim()),
+                guid: $item.attr('data-articleid'),
+            };
+        })
+        // 关键修复2：过滤掉无效链接
+        .filter((item) => item.link && item.link.length > 0);
 
-    // 获取文章列表（默认15篇）
-    const resp = await ofetch(apiUrl, {
-        method: 'POST',
-        headers: { Referer: pageUrl },
-        body: {
-            id: info.data.id,
-            ptype: 0,
-            size: ctx.req.query('limit') ? Number(ctx.req.query('limit')) : 15,
-            type: 0,
-        },
-    });
+    const items = await Promise.all(
+        list.map((item) =>
+            cache.tryGet(item.link, async () => {
+                try {
+                    // 关键修复3：确保link是字符串后再调用startsWith
+                    const absoluteLink = item.link.startsWith('http') 
+                        ? item.link 
+                        : `${baseUrl}${item.link}`;
+                    
+                    const detailResponse = await ofetch(absoluteLink);
+                    const $detail = load(detailResponse);
+                    
+                    // 提取正文内容
+                    const content = $detail('div.article-content').html() || '';
+                    
+                    return {
+                        ...item,
+                        link: absoluteLink,
+                        description: content,
+                    };
+                } catch (error) {
+                    logger.error(`[InfoQ] 抓取失败 ${item.guid}: ${error.message}`);
+                    return null; // 返回null以便后续过滤
+                }
+            })
+        )
+    );
 
-    const items = await ProcessFeed(resp.data, cache);
+    // 关键修复4：过滤掉抓取失败的项目
+    const validItems = items.filter(Boolean);
+
+    if (validItems.length === 0) {
+        throw new Error('未能获取到有效内容，请检查话题ID是否正确或原始站点是否可访问');
+    }
 
     return {
-        title: `InfoQ 话题 - ${topicName}`,
-        description: info.data.desc,
-        image: info.data.cover,
-        link: pageUrl,
-        item: items,
+        title: `InfoQ - ${topicId}`,
+        link: topicUrl,
+        description: `InfoQ topic: ${topicId}`,
+        item: validItems,
     };
 }
