@@ -4,7 +4,7 @@ import logger from '@/utils/logger';
 import ofetch from '@/utils/ofetch';
 
 // 并发控制：每批最多3个请求
-const CONCURRENCY_LIMIT = 3;
+const CONCURRENCY_LIMIT = 4;
 // 随机延迟范围（ms）
 const REQUEST_DELAY = [1000, 1500, 2000, 2500];
 
