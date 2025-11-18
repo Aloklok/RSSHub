@@ -7,7 +7,8 @@ import cache from '@/utils/cache';
 import logger from '@/utils/logger';
 import vm from 'node:vm';
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// 随机延迟函数，模拟人类阅读间隔
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const route: Route = {
     path: '/developer/blog',
@@ -31,7 +32,13 @@ async function handler() {
     const rootUrl = 'https://developer.aliyun.com';
     const currentUrl = `${rootUrl}/blog`;
 
-    const response = await ofetch(currentUrl);
+    // 伪装 Headers
+    const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': rootUrl,
+    };
+
+    const response = await ofetch(currentUrl, { headers });
     const $ = load(response);
 
     const list = $('li.blog-home-main-box-card')
@@ -54,42 +61,56 @@ async function handler() {
         list.map((item) =>
             cache.tryGet(item.link, async () => {
                 try {
-                    await sleep(Math.random() * 1500 + 500);
+                    // 随机延迟 0.5s - 1.5s
+                    await sleep(Math.random() * 1000 + 500);
 
-                    const detailResponse = await ofetch(item.link);
+                    const detailResponse = await ofetch(item.link, { headers });
+                    
+                    // 提取阿里云特有的 larkContent 数据
                     const scriptMatch = detailResponse.match(/GLOBAL_CONFIG\.larkContent = '([\s\S]*?)';/s);
 
                     if (scriptMatch && scriptMatch[1]) {
                         const sandbox = { GLOBAL_CONFIG: {} };
                         vm.createContext(sandbox);
+                        // 使用 VM 安全执行 JS 代码片段，还原被转义的字符
                         vm.runInContext(scriptMatch[0], sandbox);
                         let content = sandbox.GLOBAL_CONFIG.larkContent;
 
                         const $content = load(content, { xmlMode: false });
                         
-                        // 1. 转换图片 - 修复URL空格和添加referrerpolicy
-                        $content('card[type="inline"][name="image"]').each((_, el) => {
+                        // === 核心：图片处理 ===
+                        // 阿里云使用 <card> 标签存储图片数据，需要转换
+                        $content('card[name="image"]').each((_, el) => {
                             const $el = $content(el);
                             const value = $el.attr('value');
                             if (value) {
                                 try {
+                                    // 解码 value 中的 JSON 数据
                                     const decodedValue = decodeURIComponent(value);
                                     const jsonString = decodedValue.replace(/^data:/, '');
                                     const imageData = JSON.parse(jsonString);
                                     
-                                    // 关键修复：去除URL末尾空格并添加referrerpolicy
                                     const imageSrc = imageData.src ? imageData.src.trim() : '';
                                     
-                                    const $img = $content(`
-                                        <img src="${imageSrc}" 
-                                             alt="${imageData.name || ''}"
-                                             ${imageData.width ? `width="${imageData.width}"` : ''}
-                                             ${imageData.height ? `height="${imageData.height}"` : ''}
-                                             referrerpolicy="no-referrer">
-                                    `);
-                                    $el.replaceWith($img);
+                                    if (imageSrc) {
+                                        // 生成纯净的 img 标签
+                                        // 重点：完全不设置 width 和 height，让 RSS 阅读器自适应
+                                        const $img = $content('<img>').attr({
+                                            src: imageSrc,
+                                            // 你的示例中有的关键属性
+                                            referrerpolicy: 'no-referrer',
+                                            loading: 'lazy',
+                                            // 为了兼容性，额外加一个
+                                            rel: 'noreferrer',
+                                            alt: imageData.name || 'image'
+                                        });
+                                        
+                                        // 用 figure 包裹是 RSS 的最佳实践
+                                        $el.replaceWith($('<figure>').append($img));
+                                    } else {
+                                        $el.remove();
+                                    }
                                 } catch (e) {
-                                    logger.warn(`[Aliyun Blog] 图片解析失败: ${e.message}`);
                                     $el.remove();
                                 }
                             } else {
@@ -97,44 +118,49 @@ async function handler() {
                             }
                         });
 
-                        // 2. 移除所有残留的<card>标签（特别是表格）
-                        $content('card').each((_, el) => {
+                        // === 代码块处理 ===
+                        $content('card[name="codeblock"]').each((_, el) => {
                             const $el = $content(el);
-                            const text = $el.text().trim();
-                            if (text) {
-                                $el.replaceWith(`<p>[卡片内容: ${text.substring(0, 50)}...]</p>`);
-                            } else {
+                            const value = $el.attr('value');
+                            try {
+                                const json = JSON.parse(decodeURIComponent(value).replace(/^data:/, ''));
+                                $el.replaceWith(`<pre><code class="language-${json.mode || ''}">${json.code || ''}</code></pre>`);
+                            } catch (e) {
                                 $el.remove();
                             }
                         });
 
-                        // 3. 净化HTML
-                        $content('[data-lake-id], [class], [id]').removeAttr('data-lake-id class id');
+                        // === 清理工作 ===
+                        // 1. 移除残留的 card
+                        $content('card').remove();
+                        
+                        // 2. 移除所有行内样式和类名，防止污染 RSS 阅读器样式
+                        $content('*').removeAttr('class style data-lake-id id');
+
+                        // 3. 智能移除空行和无意义的 span
                         $content('span').each((_, el) => {
                             const $el = $content(el);
+                            // 替换掉无意义的 span，保留内容
                             $el.replaceWith($el.contents());
                         });
+                        
+                        // 移除完全空的 p 标签
                         $content('p').each((_, el) => {
                             const $el = $content(el);
-                            const text = $el.text().trim();
-                            const hasImg = $el.find('img').length > 0;
-                            const hasBrOnly = $el.children().length === 1 && $el.children('br').length === 1;
-                            if (!text && !hasImg && hasBrOnly) {
-                                $el.replaceWith('<br>');
-                            } else if (!text && !hasImg) {
+                            if ($el.text().trim() === '' && $el.find('img').length === 0) {
                                 $el.remove();
                             }
                         });
-                        $content('br + br').remove();
-                        
+
                         content = $content('body').html() || content;
                         item.description = content;
                     }
 
-                    // 修复作者邮箱格式
+                    // 作者名清理 (去除多余空格)
                     if (item.author) {
-                        item.author = `${item.author} (none@aliyun.com)`;
+                        item.author = item.author.replace(/\s+/g, ' ').trim();
                     }
+
                 } catch (error) {
                     logger.error(`[Aliyun Blog] 抓取失败 ${item.link}: ${error.message}`);
                 }
