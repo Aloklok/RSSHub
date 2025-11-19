@@ -3,16 +3,15 @@ import logger from '@/utils/logger';
 import ofetch from '@/utils/ofetch';
 
 // 并发控制配置
-const CONCURRENCY_LIMIT = 3; // 稍微保守一点，3个并发
-const REQUEST_DELAY = [800, 1200, 1500]; // 毫秒延迟
+const CONCURRENCY_LIMIT = 3;
+const REQUEST_DELAY = [800, 1200, 1500];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // 基础请求函数
 const fetchArticleDetail = async (uuid, link) => {
     const detailUrl = 'https://www.infoq.cn/public/v1/article/getDetail';
-
-    // 请求前随机延迟，模拟人类行为
+    
     const delay = REQUEST_DELAY[Math.floor(Math.random() * REQUEST_DELAY.length)];
     await sleep(delay);
 
@@ -21,7 +20,7 @@ const fetchArticleDetail = async (uuid, link) => {
             method: 'POST',
             headers: {
                 'Referer': link,
-                'Content-Type': 'application/json', // 关键：防止 415 错误
+                'Content-Type': 'application/json',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Origin': 'https://www.infoq.cn'
             },
@@ -29,13 +28,12 @@ const fetchArticleDetail = async (uuid, link) => {
         });
         return resp.data;
     } catch (e) {
-        // 如果是 404 或文章被删，忽略错误
         if (e.response?.status === 404) return null;
         throw e;
     }
 };
 
-// 递归解析内容
+// 递归解析内容 (保持不变)
 const parseToSimpleText = (content) => {
     if (!content) return '';
     if (typeof content === 'string') return content;
@@ -43,7 +41,6 @@ const parseToSimpleText = (content) => {
         return content.map(parseToSimpleText).join('');
     }
     
-    // 处理 InfoQ 特有的文档结构
     switch (content.type) {
         case 'doc':
             return parseToSimpleText(content.content);
@@ -67,7 +64,6 @@ const parseToSimpleText = (content) => {
         case 'paragraph':
         case 'p':
             return `<p>${parseToSimpleText(content.content)}</p>`;
-        // 处理列表
         case 'bullet_list':
             return `<ul>${parseToSimpleText(content.content)}</ul>`;
         case 'ordered_list':
@@ -79,30 +75,28 @@ const parseToSimpleText = (content) => {
     }
 };
 
+// 解析入口 (保持不变)
 const parseContent = (content) => {
-    // InfoQ 有时返回 JSON 字符串，有时直接是对象
     try {
         if (typeof content === 'string' && content.trim().startsWith('{')) {
             return parseToSimpleText([JSON.parse(content)]);
         }
         return parseToSimpleText(content);
     } catch (e) {
-        return content; // 降级处理
+        return content;
     }
 };
 
-// 核心处理函数
+// --- 核心修改在这里 ---
 const ProcessFeed = async (list, cache) => {
     const items = [];
 
-    // 分批处理循环
     for (let i = 0; i < list.length; i += CONCURRENCY_LIMIT) {
         const batch = list.slice(i, i + CONCURRENCY_LIMIT);
         logger.debug(`[InfoQ] 处理批次 ${i / CONCURRENCY_LIMIT + 1}, 数量: ${batch.length}`);
 
         const batchPromises = batch.map((e) => {
             const uuid = e.uuid;
-            // InfoQ 的 link 结构
             const link = `https://www.infoq.cn/article/${uuid}`;
 
             return cache.tryGet(`infoq:${uuid}`, async () => {
@@ -110,18 +104,29 @@ const ProcessFeed = async (list, cache) => {
                     const data = await fetchArticleDetail(uuid, link);
                     if (!data) return null;
 
-                    let content;
-                    // 有些文章内容是 URL (比如 PDF 或者外链)
+                    let finalContentRaw;
+
+                    // [关键修改]：如果有 content_url，去下载该 URL 的内容
                     if (data.content_url) {
-                        content = `<a href="${data.content_url}">点击查看原文内容</a>`;
+                        try {
+                            // 直接请求 CDN 上的 JSON
+                            finalContentRaw = await ofetch(data.content_url);
+                        } catch (err) {
+                            logger.error(`[InfoQ] CDN fetch failed for ${uuid}: ${err}`);
+                            // 如果下载失败，回退到只显示链接
+                            finalContentRaw = `<a href="${data.content_url}">内容加载失败，点击查看原文</a>`;
+                        }
                     } else {
-                        content = parseContent(data.content);
+                        // 否则使用直接返回的 content
+                        finalContentRaw = data.content;
                     }
+
+                    const content = parseContent(finalContentRaw);
 
                     return {
                         title: data.article_title,
                         description: content,
-                        pubDate: parseDate(e.publish_time, 'x'), // 时间戳解析
+                        pubDate: parseDate(e.publish_time, 'x'),
                         category: [
                             ...(e.topic?.map((t) => t.name) || []),
                             ...(e.label?.map((l) => l.name) || [])
@@ -137,11 +142,9 @@ const ProcessFeed = async (list, cache) => {
             });
         });
 
-        // 等待当前批次完成
         const batchResults = await Promise.all(batchPromises);
         items.push(...batchResults.filter(Boolean));
 
-        // 批次之间额外休息一下，进一步降低 RPS
         if (i + CONCURRENCY_LIMIT < list.length) {
             await sleep(1000);
         }
