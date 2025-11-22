@@ -45,3 +45,9 @@ jobs:
           # 传入我们之前在本地构建时使用的参数，确保 Puppeteer 功能正常
           build-args: |
             PUPPETEER_SKIP_DOWNLOAD=0
+            # =========== 新增部分开始 ===========
+          # 告诉它：去 GitHub Actions 的缓存里找找有没有现成的
+          cache-from: type=gha
+          # 告诉它：构建完把新的缓存存回 GitHub Actions，mode=max 表示尽可能多存
+          cache-to: type=gha,mode=max
+          # =========== 新增部分结束 ===========
