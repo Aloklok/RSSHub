@@ -33,7 +33,7 @@ const fetchArticleDetail = async (uuid, link) => {
     }
 };
 
-// 递归解析内容 (保持不变)
+// 递归解析内容
 const parseToSimpleText = (content) => {
     if (!content) return '';
     if (typeof content === 'string') return content;
@@ -51,10 +51,20 @@ const parseToSimpleText = (content) => {
             return `<h${level}>${parseToSimpleText(content.content)}</h${level}>`;
         case 'blockquote':
             return `<blockquote>${parseToSimpleText(content.content)}</blockquote>`;
+            
+        // --- 图片处理核心修改 ---
         case 'image':
-            const src = content.attrs?.src;
+            const originalSrc = content.attrs?.src;
+            if (!originalSrc) return '';
+
+            // 使用 weserv.nl 代理图片，解决防盗链和跨域问题
+            // encodeURIComponent 是必须的，防止 url 参数解析错误
+            const proxySrc = `https://images.weserv.nl/?url=${encodeURIComponent(originalSrc)}`;
+
             const caption = content.attrs?.title || content.attrs?.alt;
-            return src ? `<figure><img src="${src}" referrerpolicy="no-referrer"><figcaption>${caption || ''}</figcaption></figure>` : '';
+            return `<figure><img src="${proxySrc}" referrerpolicy="no-referrer"><figcaption>${caption || ''}</figcaption></figure>`;
+        // -----------------------
+
         case 'codeblock':
             const lang = content.attrs?.lang || '';
             return `<pre><code class="language-${lang}">${parseToSimpleText(content.content)}</code></pre>`;
@@ -75,7 +85,7 @@ const parseToSimpleText = (content) => {
     }
 };
 
-// 解析入口 (保持不变)
+// 解析入口
 const parseContent = (content) => {
     try {
         if (typeof content === 'string' && content.trim().startsWith('{')) {
@@ -87,7 +97,6 @@ const parseContent = (content) => {
     }
 };
 
-// --- 核心修改在这里 ---
 const ProcessFeed = async (list, cache) => {
     const items = [];
 
@@ -106,18 +115,15 @@ const ProcessFeed = async (list, cache) => {
 
                     let finalContentRaw;
 
-                    // [关键修改]：如果有 content_url，去下载该 URL 的内容
+                    // 处理 content_url (CDN json) 的情况
                     if (data.content_url) {
                         try {
-                            // 直接请求 CDN 上的 JSON
                             finalContentRaw = await ofetch(data.content_url);
                         } catch (err) {
                             logger.error(`[InfoQ] CDN fetch failed for ${uuid}: ${err}`);
-                            // 如果下载失败，回退到只显示链接
                             finalContentRaw = `<a href="${data.content_url}">内容加载失败，点击查看原文</a>`;
                         }
                     } else {
-                        // 否则使用直接返回的 content
                         finalContentRaw = data.content;
                     }
 
