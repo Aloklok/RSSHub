@@ -1,8 +1,7 @@
-// 文件路径: lib/routes/nasa/apod-cn.ts
 import { Route } from '@/types';
 import got from '@/utils/got';
 import { parseDate } from '@/utils/parse-date';
-import { load } from 'cheerio'; // 新增：用于清理HTML
+import { load } from 'cheerio';
 
 export const route: Route = {
     path: '/apod-cn',
@@ -33,7 +32,8 @@ export const route: Route = {
 
 async function handler(ctx) {
     const limit = ctx.req.query('limit') ? Number.parseInt(ctx.req.query('limit'), 10) : 10;
-    // 修复1：移除URL中的多余空格
+    
+    // API 地址
     const rootUrl = `https://www.nasachina.cn/wp-json/wp/v2/posts?categories=2&per_page=${limit}`;
     
     const { data } = await got({
@@ -42,24 +42,32 @@ async function handler(ctx) {
     });
 
     const items = data.map((item) => {
-        // 修复2：清理HTML内容中的URL空格
         const $ = load(item.content.rendered, { xmlMode: false });
         
-        // 清理所有img标签的src和srcset属性
+        // --- 核心修改：图片代理处理 ---
         $('img').each((_, el) => {
             const $el = $(el);
-            const src = $el.attr('src');
-            const srcset = $el.attr('srcset');
+            let src = $el.attr('src');
             
             if (src) {
-                $el.attr('src', src.trim());
+                src = src.trim();
+                // 1. 使用 weserv.nl 代理图片
+                const proxySrc = `https://images.weserv.nl/?url=${encodeURIComponent(src)}`;
+                $el.attr('src', proxySrc);
+                
+                // 2. [关键] 移除 srcset 属性
+                // 如果不移除，阅读器可能会忽略 src 而去加载 srcset 里的原始高防盗链链接，导致裂图
+                $el.removeAttr('srcset');
             }
-            if (srcset) {
-                $el.attr('srcset', srcset.trim());
-            }
-            // 确保referrerpolicy存在
+            
+            // 依然加上 no-referrer 作为双重保险
             $el.attr('referrerpolicy', 'no-referrer');
+            
+            // 修复图片宽度过大导致的排版问题（可选，weserv 会自动处理，但为了保险）
+            $el.removeAttr('width');
+            $el.removeAttr('height');
         });
+        // -------------------------
         
         // 清理所有a标签的href属性
         $('a').each((_, el) => {
@@ -72,9 +80,9 @@ async function handler(ctx) {
 
         return {
             title: item.title.rendered,
-            description: $.html(), // 使用清理后的HTML
+            description: $.html(),
             pubDate: parseDate(item.date_gmt),
-            link: item.link.trim(), // 修复3：清理link的空格
+            link: item.link.trim(),
         };
     });
 
