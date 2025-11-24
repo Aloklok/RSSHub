@@ -44,32 +44,51 @@ async function handler(ctx) {
     const items = data.map((item) => {
         const $ = load(item.content.rendered, { xmlMode: false });
         
-        // --- 核心修改：图片代理处理 ---
+        // --- 核心修改开始 ---
         $('img').each((_, el) => {
             const $el = $(el);
             let src = $el.attr('src');
             
+            // 1. 处理 img 标签本身：使用 weserv 代理
             if (src) {
                 src = src.trim();
-                // 1. 使用 weserv.nl 代理图片
                 const proxySrc = `https://images.weserv.nl/?url=${encodeURIComponent(src)}`;
                 $el.attr('src', proxySrc);
-                
-                // 2. [关键] 移除 srcset 属性
-                // 如果不移除，阅读器可能会忽略 src 而去加载 srcset 里的原始高防盗链链接，导致裂图
-                $el.removeAttr('srcset');
             }
-            
-            // 依然加上 no-referrer 作为双重保险
-            $el.attr('referrerpolicy', 'no-referrer');
-            
-            // 修复图片宽度过大导致的排版问题（可选，weserv 会自动处理，但为了保险）
+
+            // 2. 暴力移除所有可能导致阅读器解析错误的属性
+            // 移除 srcset 和 sizes 防止阅读器尝试加载原图
+            $el.removeAttr('srcset');
+            $el.removeAttr('sizes');
+            $el.removeAttr('class');
+            $el.removeAttr('style');
             $el.removeAttr('width');
             $el.removeAttr('height');
+            $el.removeAttr('fetchpriority');
+            $el.removeAttr('decoding');
+            
+            // 加上 no-referrer 作为保险
+            $el.attr('referrerpolicy', 'no-referrer');
+
+            // 3. [关键修复] 处理包裹图片的 <a> 标签
+            // 如果图片被 <a> 包裹，且 <a> 指向的是一张图片，那么这个链接也必须走代理
+            // 否则在 FreshRSS 点击预览时会触发 403
+            const $parent = $el.parent();
+            if ($parent.prop('tagName') === 'A') {
+                let parentHref = $parent.attr('href');
+                // 判断链接后缀是否为图片格式 (jpg, png, webp 等)
+                if (parentHref && /\.(jpg|jpeg|png|gif|webp|bmp|tif)$/i.test(parentHref.trim())) {
+                    parentHref = parentHref.trim();
+                    const proxyHref = `https://images.weserv.nl/?url=${encodeURIComponent(parentHref)}`;
+                    $parent.attr('href', proxyHref);
+                    $parent.attr('target', '_blank'); // 强制新标签页打开
+                    $parent.attr('referrerpolicy', 'no-referrer');
+                }
+            }
         });
-        // -------------------------
+        // --- 核心修改结束 ---
         
-        // 清理所有a标签的href属性
+        // 清理其他文本链接的空格
         $('a').each((_, el) => {
             const $el = $(el);
             const href = $el.attr('href');
