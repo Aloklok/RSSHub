@@ -1,35 +1,3 @@
-import { Route } from '@/types';
-import got from '@/utils/got';
-import { parseDate } from '@/utils/parse-date';
-import { load } from 'cheerio';
-
-export const route: Route = {
-    path: '/apod-cn',
-    categories: ['picture'],
-    example: '/nasa/apod-cn',
-    parameters: {},
-    features: {
-        requireConfig: false,
-        requirePuppeteer: false,
-        antiCrawler: false,
-        supportBT: false,
-        supportPodcast: false,
-        supportScihub: false,
-    },
-    radar: [
-        {
-            source: ['apod.nasa.govundefined'],
-        },
-    ],
-    name: 'NASA 中文',
-    maintainers: ['nczitzk', 'williamgateszhao'],
-    handler,
-    url: 'apod.nasa.govundefined',
-    description: `::: tip
-  [NASA 中文](https://www.nasachina.cn/ ) 提供了每日天文图的中英双语图文说明，但在更新上偶尔略有一两天的延迟。
-:::`,
-};
-
 async function handler(ctx) {
     const limit = ctx.req.query('limit') ? Number.parseInt(ctx.req.query('limit'), 10) : 10;
     
@@ -49,39 +17,39 @@ async function handler(ctx) {
             const $el = $(el);
             let src = $el.attr('src');
             
-            // 1. 处理 img 标签本身：使用 weserv 代理
             if (src) {
                 src = src.trim();
-                const proxySrc = `https://images.weserv.nl/?url=${encodeURIComponent(src)}`;
+                
+                // 1. 【修改点】改用 WordPress 官方 CDN (i0.wp.com)
+                // 原理：将 https://www.nasachina.cn/... 替换为 https://i0.wp.com/www.nasachina.cn/...
+                // 这种方式对 WordPress 站点极其稳定，因为它们通常会把 wp.com 列入白名单
+                
+                // 去掉协议头 (http:// 或 https://)
+                const cleanSrc = src.replace(/^https?:\/\//, '');
+                // 拼接 wp.com 代理地址
+                const proxySrc = `https://i0.wp.com/${cleanSrc}`;
+                
                 $el.attr('src', proxySrc);
             }
 
-            // 2. 暴力移除所有可能导致阅读器解析错误的属性
-            // 移除 srcset 和 sizes 防止阅读器尝试加载原图
-            $el.removeAttr('srcset');
-            $el.removeAttr('sizes');
-            $el.removeAttr('class');
-            $el.removeAttr('style');
-            $el.removeAttr('width');
-            $el.removeAttr('height');
-            $el.removeAttr('fetchpriority');
-            $el.removeAttr('decoding');
+            // 2. 移除干扰属性 (保持你原有的优秀逻辑)
+            const attrsToRemove = ['srcset', 'sizes', 'class', 'style', 'width', 'height', 'fetchpriority', 'decoding'];
+            attrsToRemove.forEach(attr => $el.removeAttr(attr));
             
-            // 加上 no-referrer 作为保险
+            // 加上 no-referrer
             $el.attr('referrerpolicy', 'no-referrer');
 
-            // 3. [关键修复] 处理包裹图片的 <a> 标签
-            // 如果图片被 <a> 包裹，且 <a> 指向的是一张图片，那么这个链接也必须走代理
-            // 否则在 FreshRSS 点击预览时会触发 403
+            // 3. 处理包裹图片的 <a> 标签 (同步修改为 i0.wp.com)
             const $parent = $el.parent();
             if ($parent.prop('tagName') === 'A') {
                 let parentHref = $parent.attr('href');
-                // 判断链接后缀是否为图片格式 (jpg, png, webp 等)
                 if (parentHref && /\.(jpg|jpeg|png|gif|webp|bmp|tif)$/i.test(parentHref.trim())) {
                     parentHref = parentHref.trim();
-                    const proxyHref = `https://images.weserv.nl/?url=${encodeURIComponent(parentHref)}`;
+                    const cleanHref = parentHref.replace(/^https?:\/\//, '');
+                    const proxyHref = `https://i0.wp.com/${cleanHref}`;
+                    
                     $parent.attr('href', proxyHref);
-                    $parent.attr('target', '_blank'); // 强制新标签页打开
+                    $parent.attr('target', '_blank');
                     $parent.attr('referrerpolicy', 'no-referrer');
                 }
             }
