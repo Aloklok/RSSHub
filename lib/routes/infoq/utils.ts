@@ -44,46 +44,74 @@ const parseToSimpleText = (content) => {
     switch (content.type) {
         case 'doc':
             return parseToSimpleText(content.content);
+        
         case 'text':
-            return content.text || '';
+            let text = content.text || '';
+            if (content.marks && Array.isArray(content.marks)) {
+                content.marks.forEach(mark => {
+                    if (mark.type === 'bold' || mark.type === 'strong') text = `<b>${text}</b>`;
+                    if (mark.type === 'italic' || mark.type === 'em') text = `<i>${text}</i>`;
+                    if (mark.type === 'code') text = `<code>${text}</code>`;
+                    if (mark.type === 'strike') text = `<s>${text}</s>`;
+                });
+            }
+            return text;
+
         case 'heading':
             const level = content.attrs?.level || 3;
             return `<h${level}>${parseToSimpleText(content.content)}</h${level}>`;
+            
         case 'blockquote':
             return `<blockquote>${parseToSimpleText(content.content)}</blockquote>`;
             
-        // --- 图片处理核心修改 ---
+        // --- 修改后的图片处理逻辑 ---
         case 'image':
             const originalSrc = content.attrs?.src;
             if (!originalSrc) return '';
 
-            // 使用 weserv.nl 代理图片，解决防盗链和跨域问题
-            // encodeURIComponent 是必须的，防止 url 参数解析错误
-            const proxySrc = `https://images.weserv.nl/?url=${encodeURIComponent(originalSrc)}`;
+            let proxySrc;
+            // 检查是否为 Base64 数据
+            if (originalSrc.startsWith('data:')) {
+                proxySrc = originalSrc;
+            } else {
+                // 普通链接才走代理
+                proxySrc = `https://images.weserv.nl/?url=${encodeURIComponent(originalSrc)}`;
+            }
 
             const caption = content.attrs?.title || content.attrs?.alt;
             return `<figure><img src="${proxySrc}" referrerpolicy="no-referrer"><figcaption>${caption || ''}</figcaption></figure>`;
-        // -----------------------
+        // -------------------------
 
         case 'codeblock':
             const lang = content.attrs?.lang || '';
-            return `<pre><code class="language-${lang}">${parseToSimpleText(content.content)}</code></pre>`;
+            const codeText = content.content ? parseToSimpleText(content.content) : (content.text || '');
+            return `<pre><code class="language-${lang}">${codeText}</code></pre>`;
+            
         case 'link':
             const href = content.attrs?.href || '';
             return `<a href="${href}" target="_blank">${parseToSimpleText(content.content)}</a>`;
+            
         case 'paragraph':
         case 'p':
             return `<p>${parseToSimpleText(content.content)}</p>`;
+            
         case 'bullet_list':
             return `<ul>${parseToSimpleText(content.content)}</ul>`;
+            
         case 'ordered_list':
             return `<ol>${parseToSimpleText(content.content)}</ol>`;
+            
         case 'list_item':
             return `<li>${parseToSimpleText(content.content)}</li>`;
+            
         default:
             return Array.isArray(content.content) ? parseToSimpleText(content.content) : '';
     }
 };
+
+
+
+
 
 // 解析入口
 const parseContent = (content) => {
