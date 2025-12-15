@@ -3,51 +3,67 @@
 # 1. 工作流的名称
 name: Docker Image CI
 
-# 2. 触发条件：每当您向 master 或 main 分支推送代码时，此工作流就会自动运行
+# 2. 触发条件
 on:
   push:
     branches: [ "master", "main" ]
+    # 新增：如果你打上了 tag (比如 v1.0.0)，也会触发构建并发布对应版本的镜像
+    tags:
+      - 'v*'
 
 # 3. 具体的工作任务
 jobs:
   build_and_push:
-    # 使用最新的 Ubuntu 系统作为我们的“云厨房”
     runs-on: ubuntu-latest
     
     steps:
-      # 第一步：下载您的代码到“云厨房”
+      # 第一步：检出代码
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 第二步：设置 Docker Buildx，这是一个现代化的构建工具
+      # 第二步：设置 Docker Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 第三步：登录到 Docker Hub（这里就用到了您提供的代码和您设置的机密信息）
+      # 第三步：登录到 Docker Hub
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 第四步：构建镜像并推送到 Docker Hub（最核心的一步）
+      # ==== 新增步骤：自动生成 Tag 和 Label ====
+      # 这个步骤会根据你的 Git 状态自动计算出需要打什么标签
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/my-rsshub
+          # 这里定义了标签生成的规则
+          tags: |
+            # 规则1: 始终打上 latest 标签
+            type=raw,value=latest
+            # 规则2: 使用短 Commit SHA (如 sha-82638e1)，这是最安全的版本号
+            type=sha
+            # 规则3: 如果是 push tag 事件，使用 tag 名 (如 v1.0.0)
+            type=ref,event=tag
+            # 规则4: (可选) 打上日期标签 YYYY-MM-DD
+            type=raw,value={{date 'YYYY-MM-DD'}}
+
+      # 第四步：构建并推送
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
-          # 使用当前文件夹作为构建上下文
           context: .
-          # 明确指定 Dockerfile 的位置
           file: ./Dockerfile
-          # 告诉它要执行推送操作
           push: true
-          # 为镜像打上标签，格式为：<您的用户名>/my-rsshub:latest
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/my-rsshub:latest
-          # 传入我们之前在本地构建时使用的参数，确保 Puppeteer 功能正常
+          # 重点修改这里：不再硬编码 tags，而是使用上一步(meta)生成的 tags
+          tags: ${{ steps.meta.outputs.tags }}
+          # 新增：添加标准OCI标签（如源代码地址、构建时间等）
+          labels: ${{ steps.meta.outputs.labels }}
+          # 构建参数保持不变
           build-args: |
             PUPPETEER_SKIP_DOWNLOAD=0
-            # =========== 新增部分开始 ===========
-          # 告诉它：去 GitHub Actions 的缓存里找找有没有现成的
+          # 缓存配置保持不变
           cache-from: type=gha
-          # 告诉它：构建完把新的缓存存回 GitHub Actions，mode=max 表示尽可能多存
           cache-to: type=gha,mode=max
-          # =========== 新增部分结束 ===========
