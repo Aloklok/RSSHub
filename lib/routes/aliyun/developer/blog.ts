@@ -79,44 +79,51 @@ async function handler() {
                         const $content = load(content, { xmlMode: false });
                         
                         // === 核心：图片处理 ===
-                        // 阿里云使用 <card> 标签存储图片数据，需要转换
-                        $content('card[name="image"]').each((_, el) => {
-                            const $el = $content(el);
-                            const value = $el.attr('value');
-                            if (value) {
-                                try {
-                                    // 解码 value 中的 JSON 数据
-                                    const decodedValue = decodeURIComponent(value);
-                                    const jsonString = decodedValue.replace(/^data:/, '');
-                                    const imageData = JSON.parse(jsonString);
-                                    
-                                    const imageSrc = imageData.src ? imageData.src.trim() : '';
-                                    
-                                    if (imageSrc) {
-                                        // 生成纯净的 img 标签
-                                        // 重点：完全不设置 width 和 height，让 RSS 阅读器自适应
-                                        const $img = $content('<img>').attr({
-                                            src: imageSrc,
-                                            // 你的示例中有的关键属性
-                                            referrerpolicy: 'no-referrer',
-                                            loading: 'lazy',
-                                            // 为了兼容性，额外加一个
-                                            rel: 'noreferrer',
-                                            alt: imageData.name || 'image'
-                                        });
-                                        
-                                        // 用 figure 包裹是 RSS 的最佳实践
-                                        $el.replaceWith($('<figure>').append($img));
-                                    } else {
-                                        $el.remove();
-                                    }
-                                } catch (e) {
-                                    $el.remove();
-                                }
-                            } else {
-                                $el.remove();
-                            }
-                        });
+                       // === 核心：图片处理 ===
+$content('card[name="image"]').each((_, el) => {
+    const $el = $content(el);
+    const value = $el.attr('value');
+    if (value) {
+        try {
+            const decodedValue = decodeURIComponent(value);
+            const jsonString = decodedValue.replace(/^data:/, '');
+            const imageData = JSON.parse(jsonString);
+            
+            let imageSrc = imageData.src ? imageData.src.trim() : '';
+            
+            if (imageSrc) {
+                // 1. 核心修复：剔除 tmpCode 等临时参数
+                // 将 https://xxx.webp?tmpCode=... 变为 https://xxx.webp
+                imageSrc = imageSrc.split('?')[0];
+
+                // 2. 可选：如果图片仍然 403，可以使用 wsrv.nl 镜像代理
+                // imageSrc = `https://wsrv.nl/?url=${encodeURIComponent(imageSrc)}`;
+
+                const $img = $content('<img>').attr({
+                    src: imageSrc,
+                    referrerpolicy: 'no-referrer', // 必须：告诉浏览器不要发送 Referer
+                    loading: 'lazy',
+                    rel: 'noreferrer',
+                    alt: imageData.name || 'image'
+                });
+                
+                // 3. 规范化：确保图片能撑开容器
+                $img.css({
+                    'max-width': '100%',
+                    'height': 'auto'
+                });
+                
+                $el.replaceWith($('<figure style="text-align:center;margin:1em 0;">').append($img));
+            } else {
+                $el.remove();
+            }
+        } catch (e) {
+            $el.remove();
+        }
+    } else {
+        $el.remove();
+    }
+});
 
                         // === 代码块处理 ===
                         $content('card[name="codeblock"]').each((_, el) => {
