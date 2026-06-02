@@ -19,15 +19,15 @@ jobs:
     steps:
       # 第一步：检出代码
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # 第二步：设置 Docker Buildx
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # 第三步：登录到 Docker Hub
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -36,7 +36,7 @@ jobs:
       # 这个步骤会根据你的 Git 状态自动计算出需要打什么标签
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/my-rsshub
           # 这里定义了标签生成的规则
@@ -52,7 +52,7 @@ jobs:
 
       # 第四步：构建并推送
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
@@ -63,7 +63,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           # 构建参数保持不变
           build-args: |
-            PUPPETEER_SKIP_DOWNLOAD=0
+            PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
           # 缓存配置保持不变
           cache-from: type=gha
           cache-to: type=gha,mode=max
