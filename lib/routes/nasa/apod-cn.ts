@@ -1,3 +1,35 @@
+import type { Route } from '@/types';
+import got from '@/utils/got';
+import { load } from 'cheerio';
+import { parseDate } from '@/utils/parse-date';
+
+export const route: Route = {
+    path: '/apod-cn',
+    categories: ['picture'],
+    example: '/nasa/apod-cn',
+    parameters: {},
+    features: {
+        requireConfig: false,
+        requirePuppeteer: false,
+        antiCrawler: false,
+        supportBT: false,
+        supportPodcast: false,
+        supportScihub: false,
+    },
+    radar: [
+        {
+            source: ['www.nasachina.cn/'],
+        },
+    ],
+    name: 'NASA 中文',
+    maintainers: ['nczitzk', 'williamgateszhao'],
+    handler,
+    url: 'www.nasachina.cn',
+    description: `:::tip
+[NASA 中文](https://www.nasachina.cn/) 提供了每日天文图的中英双语图文说明，但在更新上偶尔略有一两天的延迟。
+:::`,
+};
+
 async function handler(ctx) {
     const limit = ctx.req.query('limit') ? Number.parseInt(ctx.req.query('limit'), 10) : 10;
     

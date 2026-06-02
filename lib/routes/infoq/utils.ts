@@ -125,6 +125,12 @@ const parseContent = (content) => {
     }
 };
 
+const addCoverToDescription = (content, cover) => {
+    if (!cover) return content;
+    const proxyCover = `https://images.weserv.nl/?url=${encodeURIComponent(cover)}`;
+    return `<p><img src="${proxyCover}" referrerpolicy="no-referrer"></p>${content}`;
+};
+
 const ProcessFeed = async (list, cache) => {
     const items = [];
 
@@ -159,7 +165,7 @@ const ProcessFeed = async (list, cache) => {
 
                     return {
                         title: data.article_title,
-                        description: content,
+                        description: addCoverToDescription(content, data.article_cover),
                         pubDate: parseDate(e.publish_time, 'x'),
                         category: [
                             ...(e.topic?.map((t) => t.name) || []),

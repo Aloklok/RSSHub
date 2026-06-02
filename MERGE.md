@@ -29,4 +29,5 @@
 - [ ] **性能指标观测**: 观测部署到 Zeabur 后，新构建系统（tsdown）和解析器（Mercury）对内存占用和响应速度的影响。
 
 ### 维护管理
-- [ ] **自动化清理**: 考虑编写脚本或 Alias，在合并后自动执行 `git checkout HEAD -- .github/workflows` 以清理上游新增的 Workflow。
+- [x] **自动化清理**: 通过自定义 merge driver (`drop-upstream`) + 19 个空占位文件实现自动化。上游 workflow 更新会自动忽略，保持为空。`.gitattributes` 配置 `.github/workflows/** merge=drop-upstream`，driver 定义在 `.git/config`。
+- [ ] **新 workflow 文件**: 若上游新增 workflow 文件，需在本地创建同名空文件以纳入 merge driver 管理。
