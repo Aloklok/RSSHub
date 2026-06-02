@@ -4,6 +4,25 @@
 
 ---
 
+## 📅 2026-06-02
+### 合并信息
+- **来源**: `upstream/master` (DIYgod/RSSHub)
+- **上游新增提交**: 810 个
+- **合并方式**: 直接采纳上游 workflow 文件，在 GitHub Actions 页面手动禁用不需要的。仅需手动解决 3 个代码冲突。
+
+### 关键变动记录
+- **浏览器自动化迁移**: 上游全面从 Puppeteer 切换到 Playwright。
+- **Lint/格式化**: 上游引入 `oxlint` (`oxlintrc.json`)，新增 eslint 插件 (`no-then.js`, `nsfw-flag.js`)。
+
+### 冲突解决
+| 文件 | 决定 | 原因 |
+|------|------|------|
+| `Dockerfile` | 采纳上游 | 本地唯一改动（corepack 位置微调）上游已涵盖 |
+| `lib/routes/infoq/utils.ts` | 保留本地 | 本地版本更完善（并发控制、图片代理、富文本解析），额外移植上游 `addCoverToDescription` 封面图功能 |
+| `lib/routes/nasa/apod-cn.ts` | 保留本地 + 补回元数据 | 保留本地图片代理改进，补回被删除的路由元数据，修复上游 `apod.nasa.govundefined` bug |
+
+---
+
 ## 📅 2026-02-21
 ### 合并信息
 - **来源**: `upstream/master` (DIYgod/RSSHub)
@@ -24,10 +43,7 @@
 
 ## 📋 待办事项 (TODO)
 
-### 架构与部署
-- [ ] **多架构支持**: 考虑在 `.github/workflows/docker-image.yml` 中开启 `linux/arm64` 构建，以利用上游对 ARM 的 Puppeteer 优化（虽然目前 Zeabur 可能主要使用 AMD64）。
-- [ ] **性能指标观测**: 观测部署到 Zeabur 后，新构建系统（tsdown）和解析器（Mercury）对内存占用和响应速度的影响。
-
 ### 维护管理
-- [x] **自动化清理**: 通过自定义 merge driver (`drop-upstream`) + 19 个空占位文件实现自动化。上游 workflow 更新会自动忽略，保持为空。`.gitattributes` 配置 `.github/workflows/** merge=drop-upstream`，driver 定义在 `.git/config`。
-- [ ] **新 workflow 文件**: 若上游新增 workflow 文件，需在本地创建同名空文件以纳入 merge driver 管理。
+- [x] **Workflow 管理**: 直接使用上游 workflow 文件，不需要的在 GitHub Actions 页面手动 Disable 即可。移除了 `.gitattributes` merge driver 和占位文件方案。
+- [ ] **多架构支持**: 考虑在 `.github/workflows/docker-image.yml` 中开启 `linux/arm64` 构建。
+- [ ] **性能指标观测**: 观测部署到 Zeabur 后，新构建系统（tsdown）和解析器（Mercury）对内存占用和响应速度的影响。
