@@ -134,7 +134,7 @@ RUN \
     set -ex && \
     apt-get update && \
     apt-get install -yq --no-install-recommends \
-        dumb-init git curl \
+        dumb-init git curl redis-server \
     ; \
     if [ "$PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD" = 0 ]; then \
         if [ "$TARGETPLATFORM" = 'linux/amd64' ]; then \
@@ -170,11 +170,11 @@ RUN \
     fi;
 
 COPY --from=docker-minifier /app /app
+COPY scripts/docker/start.sh /app/start.sh
+RUN chmod +x /app/start.sh
 
 EXPOSE 1200
-ENTRYPOINT ["dumb-init", "--"]
-
-CMD ["npm", "run", "start"]
+ENTRYPOINT ["sh", "/app/start.sh"]
 
 # ---------------------------------------------------------------------------------------------------------------------
 
